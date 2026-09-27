@@ -15,7 +15,7 @@ RUN apk add --no-cache python3 make g++
 COPY package*.json ./
 
 # Install all dependencies including devDependencies for build
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 # Stage 2: Production Runtime
 FROM node:20-alpine AS runner
