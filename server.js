@@ -151,29 +151,36 @@ async function sendSMSOTP(phoneNumber, otp) {
     if (!phoneNumber) return { success: false, mode: "skip", reason: "no phone" };
     const rawPhone = phoneNumber.replace(/^\+/, "");
     const phone = rawPhone.startsWith("91") ? rawPhone : `91${rawPhone}`;
-    if (!process.env.MSG91_AUTH_KEY) {
+    if (!process.env.MSG91_AUTH_KEY || !process.env.MSG91_TEMPLATE_ID) {
         console.log(`[SMS DEV] 📱 OTP for ${phoneNumber}: ${otp}`);
         return { success: true, mode: "dev", otp };
     }
     try {
         const response = await axios.post(
-            "https://api.msg91.com/api/v5/otp",
-            null,
+            "https://api.msg91.com/api/v5/flow/",
             {
-                params: {
-                    template_id: process.env.MSG91_TEMPLATE_ID,
-                    mobile:      phone,
-                    authkey:     process.env.MSG91_AUTH_KEY,
-                    otp:         otp
+                template_id: process.env.MSG91_TEMPLATE_ID,
+                sender:      process.env.MSG91_SENDER_ID || "smsind",
+                short_url:   "0",
+                recipients:  [
+                    {
+                        mobiles: phone,
+                        OTP:     otp
+                    }
+                ]
+            },
+            {
+                headers: {
+                    "Content-Type": "application/json",
+                    "authkey":      process.env.MSG91_AUTH_KEY
                 }
             }
         );
-        console.log(`[MSG91 OTP] ✅ Sent to ${phoneNumber}. Response:`, response.data?.type);
+        console.log(`[MSG91 OTP] ✅ Sent to ${phoneNumber}. Response:`, response.data?.type || response.data?.message);
         return { success: true, mode: "msg91", response: response.data };
     } catch (e) {
         const errMsg = e.response?.data || e.message;
         console.error(`[MSG91 OTP] ❌ Failed for ${phoneNumber}:`, errMsg);
-        // Still log OTP to console for troubleshooting — remove in strict production
         console.log(`[SMS FALLBACK] 📱 OTP for ${phoneNumber}: ${otp}`);
         return { success: false, mode: "fallback", error: errMsg };
     }
