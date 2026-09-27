@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     region: singapore
-    buildCommand: npm install
+    buildCommand: npm install --legacy-peer-deps
     startCommand: node server.js
     autoDeploy: true
     healthCheckPath: /api/health
