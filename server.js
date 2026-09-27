@@ -180,7 +180,7 @@ async function sendSMSOTP(phoneNumber, otp) {
 }
 
 /**
- * Send a transactional SMS alert via MSG91 Flow API.
+ * Send a transactional SMS alert via MSG91 Campaign API or Flow API.
  * Used for doctor-access alerts, emergency scan notifications, etc.
  * @param {string} phoneNumber  - E.164 format e.g. +919876543210
  * @param {string} message      - The text message content
@@ -194,17 +194,26 @@ async function sendSMSAlert(phoneNumber, message) {
         return { success: true, mode: "logged" };
     }
     try {
+        const campaignSlug = process.env.MSG91_FLOW_ID;
         const response = await axios.post(
-            "https://api.msg91.com/api/v5/flow/",
+            `https://control.msg91.com/api/v5/campaign/api/campaigns/${campaignSlug}/run`,
             {
-                template_id: process.env.MSG91_FLOW_ID,
-                short_url: "0",
-                recipients: [
-                    {
-                        mobiles: phone,
-                        VAR1: message.substring(0, 150)
-                    }
-                ]
+                data: {
+                    sendTo: [
+                        {
+                            to: [
+                                {
+                                    mobiles: phone,
+                                    variables: {
+                                        OTP: {
+                                            value: message.substring(0, 150)
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
             },
             {
                 headers: {
@@ -213,7 +222,7 @@ async function sendSMSAlert(phoneNumber, message) {
                 }
             }
         );
-        console.log(`[MSG91 ALERT] ✅ Sent to ${phoneNumber}`);
+        console.log(`[MSG91 ALERT] ✅ Sent to ${phoneNumber}. Status:`, response.data?.status || "OK");
         return { success: true, mode: "msg91", response: response.data };
     } catch (e) {
         const errMsg = e.response?.data || e.message;
