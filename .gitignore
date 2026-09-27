@@ -67,3 +67,9 @@ node_modules/
 
 # dataconnect generated files
 .dataconnect
+
+# Render deploy script (contains secrets — run locally only)
+scripts/deploy-render.ps1
+
+# Nested subproject folder
+Digital-health-ID/
