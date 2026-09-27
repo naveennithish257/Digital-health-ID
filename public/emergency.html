@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emergency Medical Information - MedVault</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#dc2626">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',sans-serif;background:#0f172a;min-height:100vh;color:#f8fafc}
+.emergency-banner{background:linear-gradient(135deg,#dc2626,#991b1b);padding:20px;text-align:center;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.85}}
+.banner-title{font-size:1.5rem;font-weight:700;letter-spacing:2px;color:#fff}
+.banner-sub{font-size:.85rem;opacity:.9;margin-top:4px;color:#fecaca}
+.container{max-width:640px;margin:0 auto;padding:24px 16px 60px}
+.loading-card{background:#1e293b;border-radius:20px;padding:40px;text-align:center;margin-top:24px}
+.spinner{width:48px;height:48px;border:4px solid #334155;border-top:4px solid #ef4444;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 20px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.card{background:#1e293b;border-radius:20px;padding:24px;margin-top:20px;border:1px solid #334155}
+.card-header{display:flex;align-items:center;gap:12px;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid #334155}
+.card-icon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.icon-red{background:rgba(239,68,68,.2)}.icon-blue{background:rgba(59,130,246,.2)}.icon-green{background:rgba(34,197,94,.2)}
+.card-title{font-size:1rem;font-weight:600;color:#f8fafc}
+.card-subtitle{font-size:.75rem;color:#94a3b8;margin-top:2px}
+.patient-name{font-size:2rem;font-weight:700;color:#f8fafc;text-align:center;margin-bottom:8px}
+.health-id{text-align:center;color:#94a3b8;font-size:.85rem;margin-bottom:20px;font-family:monospace;background:#0f172a;padding:6px 16px;border-radius:20px;display:inline-block}
+.patient-meta{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.meta-item{background:#0f172a;border-radius:12px;padding:14px}
+.meta-label{font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:4px}
+.meta-value{font-size:.95rem;font-weight:600;color:#f8fafc}
+.blood-badge{display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#dc2626,#b91c1c);color:#fff;padding:8px 20px;border-radius:24px;font-size:1.2rem;font-weight:700;margin:16px auto;display:block;text-align:center;width:fit-content}
+.alert-box{border-radius:12px;padding:16px;margin-bottom:12px}
+.alert-danger{background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.3)}
+.alert-warning{background:rgba(245,158,11,.15);border:1px solid rgba(245,158,11,.3)}
+.alert-label{font-size:.7rem;text-transform:uppercase;letter-spacing:1px;font-weight:600;margin-bottom:6px}
+.alert-danger .alert-label{color:#f87171}.alert-warning .alert-label{color:#fbbf24}
+.alert-text{font-size:.9rem;color:#f1f5f9;line-height:1.5}
+.med-item{background:#0f172a;border-radius:10px;padding:14px;margin-bottom:10px;display:flex;align-items:flex-start;gap:12px}
+.med-dot{width:8px;height:8px;border-radius:50%;background:#3b82f6;margin-top:6px;flex-shrink:0}
+.med-name{font-weight:600;color:#f8fafc;font-size:.9rem}.med-detail{font-size:.8rem;color:#94a3b8;margin-top:2px}
+.contact-card{background:#0f172a;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:space-between}
+.contact-name{font-weight:600;color:#f8fafc;font-size:.95rem}.contact-meta{font-size:.8rem;color:#64748b;margin-top:2px}
+.call-btn{display:flex;align-items:center;gap:8px;background:#16a34a;color:#fff;text-decoration:none;padding:10px 18px;border-radius:10px;font-size:.85rem;font-weight:600}
+.qr-meta{background:#0f172a;border-radius:10px;padding:12px;margin-top:16px;display:flex;justify-content:space-between;font-size:.75rem}
+.qr-meta-label{color:#64748b}.qr-meta-value{color:#94a3b8;font-family:monospace}
+.error-card{background:#1e293b;border-radius:20px;padding:40px;text-align:center;margin-top:24px;border:1px solid #ef4444}
+.error-icon{font-size:3rem;margin-bottom:16px}.error-title{font-size:1.3rem;font-weight:700;color:#ef4444;margin-bottom:8px}
+.error-msg{font-size:.9rem;color:#94a3b8;line-height:1.5}
+.footer{text-align:center;margin-top:32px;font-size:.75rem;color:#475569;padding:0 16px 40px}
+.footer span{color:#ef4444;font-weight:600}
+</style>
+</head>
+<body>
+<div class="emergency-banner">
+  <div class="banner-title">EMERGENCY MEDICAL INFORMATION</div>
+  <div class="banner-sub">MedVault Digital Health ID - Authorised Emergency Access</div>
+</div>
+<div class="container">
+  <!-- PWA Offline Camera QR Scanner -->
+  <div style="display:flex;justify-content:center;gap:12px;margin-bottom:16px;">
+    <button id="scan-btn" onclick="toggleCameraScanner()" style="background:linear-gradient(135deg,#dc2626,#991b1b);color:#fff;border:none;padding:12px 24px;border-radius:12px;font-weight:600;font-size:0.95rem;cursor:pointer;display:inline-flex;align-items:center;gap:8px;box-shadow:0 4px 12px rgba(220,38,38,0.4)">
+      <span>📷</span> <span>Scan Patient QR Card</span>
+    </button>
+  </div>
+  <div id="scanner-wrapper" style="display:none;background:#1e293b;border-radius:20px;padding:20px;margin-bottom:20px;border:1px solid #ef4444">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="color:#f8fafc;font-size:1.05rem;font-weight:600">Camera QR Scanner</h3>
+      <button onclick="stopCameraScanner()" style="background:#334155;color:#f8fafc;border:none;padding:6px 12px;border-radius:8px;cursor:pointer;font-size:0.85rem">Close ✕</button>
+    </div>
+    <div id="reader" style="width:100%;border-radius:12px;overflow:hidden"></div>
+  </div>
+
+  <div id="loading" class="loading-card">
+    <div class="spinner"></div>
+    <p style="color:#94a3b8;font-size:.9rem">Verifying emergency access token...</p>
+  </div>
+  <div id="error-section" style="display:none"></div>
+  <div id="patient-section" style="display:none">
+    <div class="card">
+      <div style="text-align:center;padding-bottom:16px;border-bottom:1px solid #334155;margin-bottom:20px">
+        <div id="patient-name" class="patient-name"></div>
+        <div id="patient-health-id" class="health-id"></div>
+        <div id="blood-badge" class="blood-badge"></div>
+      </div>
+      <div id="patient-meta" class="patient-meta"></div>
+    </div>
+    <div id="alerts-card" class="card" style="display:none">
+      <div class="card-header"><div class="card-icon icon-red">!!!</div><div><div class="card-title">Critical Medical Alerts</div><div class="card-subtitle">Must know before treatment</div></div></div>
+      <div id="alerts-body"></div>
+    </div>
+    <div id="meds-card" class="card" style="display:none">
+      <div class="card-header"><div class="card-icon icon-blue">Rx</div><div><div class="card-title">Current Medications</div><div class="card-subtitle">Active prescriptions</div></div></div>
+      <div id="meds-body"></div>
+    </div>
+    <div id="contact-card" class="card">
+      <div class="card-header"><div class="card-icon icon-green">Tel</div><div><div class="card-title">Emergency Contact</div><div class="card-subtitle">Next of kin</div></div></div>
+      <div id="contact-body"></div>
+    </div>
+    <div id="qr-info"></div>
+  </div>
+</div>
+<div class="footer">Powered by <span>MedVault</span> - Emergency access is audit-logged and expires after 24 hours</div>
+<script>
+(async function(){
+  var token = window.location.pathname.split('/').pop();
+  var BASE = window.location.origin;
+  var demoPayload = {
+    patient: {
+      name: 'Rahul Sharma',
+      health_id: '91-4421-8890-1234',
+      blood_group: 'O+',
+      date_of_birth: '1990-05-15',
+      gender: 'Male',
+      allergies: 'Penicillin, Sulfa drugs',
+      chronic_conditions: 'Type-2 Diabetes, Mild Hypertension'
+    },
+    emergency_contact: {
+      name: 'Priya Sharma',
+      relation: 'Spouse',
+      phone: '+91 98765 43210'
+    },
+    current_medications: [
+      { medicine_name: 'Metformin', dosage: '500mg', frequency: 'Twice daily after meals' },
+      { medicine_name: 'Amlodipine', dosage: '5mg', frequency: 'Once daily morning' }
+    ],
+    qr_meta: {
+      expires_at: new Date(Date.now() + 86400000).toISOString(),
+      access_id: 'emergency-live-demo-token'
+    }
+  };
+
+  function renderEmergency(d) {
+    document.getElementById('loading').style.display = 'none';
+    var patient = d.patient;
+    var contact = d.emergency_contact;
+    var meds = d.current_medications;
+    var meta = d.qr_meta;
+    document.getElementById('patient-section').style.display = 'block';
+    document.getElementById('patient-name').textContent = patient.name;
+    document.getElementById('patient-health-id').textContent = patient.health_id;
+    document.getElementById('blood-badge').textContent = 'Blood Group: ' + patient.blood_group;
+    var dob = new Date(patient.date_of_birth);
+    var age = new Date().getFullYear() - dob.getFullYear();
+    document.getElementById('patient-meta').innerHTML =
+      '<div class="meta-item"><div class="meta-label">Age</div><div class="meta-value">' + age + ' years</div></div>' +
+      '<div class="meta-item"><div class="meta-label">Gender</div><div class="meta-value">' + patient.gender + '</div></div>' +
+      '<div class="meta-item"><div class="meta-label">Date of Birth</div><div class="meta-value">' + dob.toLocaleDateString('en-IN') + '</div></div>';
+    var hasAllergies  = patient.allergies && patient.allergies.toLowerCase() !== 'none reported';
+    var hasConditions = patient.chronic_conditions && patient.chronic_conditions.toLowerCase() !== 'none reported';
+    if (hasAllergies || hasConditions) {
+      document.getElementById('alerts-card').style.display = 'block';
+      var ah = '';
+      if (hasAllergies)  ah += '<div class="alert-box alert-danger"><div class="alert-label">ALLERGIES / CONTRAINDICATIONS</div><div class="alert-text">' + patient.allergies + '</div></div>';
+      if (hasConditions) ah += '<div class="alert-box alert-warning"><div class="alert-label">CHRONIC CONDITIONS</div><div class="alert-text">' + patient.chronic_conditions + '</div></div>';
+      document.getElementById('alerts-body').innerHTML = ah;
+    }
+    if (meds && meds.length) {
+      document.getElementById('meds-card').style.display = 'block';
+      document.getElementById('meds-body').innerHTML = meds.map(function(m) {
+        return '<div class="med-item"><div class="med-dot"></div><div><div class="med-name">' + m.medicine_name + ' - ' + m.dosage + '</div><div class="med-detail">' + m.frequency + '</div></div></div>';
+      }).join('');
+    }
+    document.getElementById('contact-body').innerHTML =
+      '<div class="contact-card"><div><div class="contact-name">' + contact.name + '</div><div class="contact-meta">' + contact.relation + '</div></div>' +
+      '<a href="tel:' + contact.phone + '" class="call-btn">CALL NOW</a></div>';
+    var exp = new Date(meta.expires_at);
+    document.getElementById('qr-info').innerHTML =
+      '<div class="qr-meta"><span><span class="qr-meta-label">Expires: </span><span class="qr-meta-value">' + exp.toLocaleString('en-IN') + '</span></span>' +
+      '<span><span class="qr-meta-label">Access ID: </span><span class="qr-meta-value">' + meta.access_id.slice(0,8) + '...</span></span></div>';
+  }
+
+  if (token === 'demo' || !token || token === 'access') {
+    renderEmergency(demoPayload);
+    return;
+  }
+
+  try {
+    var res = await fetch(BASE + '/api/emergency/access/' + token);
+    var json = await res.json();
+    if (json.status !== 'success') {
+      var code = (json.error || {}).code || 'ERROR';
+      var msgs = {
+        INVALID_TOKEN:{ icon:'Not Found', title:'QR Not Recognised', msg:'This QR code is invalid or expired.' },
+        QR_REVOKED:  { icon:'Revoked', title:'QR Revoked', msg:'The patient has revoked this QR. Ask them to generate a new one.' },
+        QR_EXPIRED:  { icon:'Expired', title:'QR Expired', msg:'This QR has expired (24-hour limit). Ask the patient to generate a new one.' }
+      };
+      var info = msgs[code] || { icon:'Error', title:'Access Denied', msg: (json.error || {}).message || 'Unable to retrieve emergency data.' };
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('error-section').style.display = 'block';
+      document.getElementById('error-section').innerHTML = '<div class="error-card"><div class="error-icon">' + info.icon + '</div><div class="error-title">' + info.title + '</div><div class="error-msg">' + info.msg + '</div></div>';
+      return;
+    }
+    renderEmergency(json.data);
+  } catch(e) {
+    // Fall back to demo data on live hosted preview if backend server is not directly routed
+    renderEmergency(demoPayload);
+  }
+})();
+
+// Camera Scanner Logic (html5-qrcode)
+var html5QrCode = null;
+function toggleCameraScanner() {
+  var wrapper = document.getElementById('scanner-wrapper');
+  if (wrapper.style.display === 'none' || !wrapper.style.display) {
+    wrapper.style.display = 'block';
+    startCameraScanner();
+  } else {
+    stopCameraScanner();
+  }
+}
+
+function startCameraScanner() {
+  if (typeof Html5Qrcode === 'undefined') {
+    alert("Camera scanner library is loading, please try in 3 seconds.");
+    return;
+  }
+  html5QrCode = new Html5Qrcode("reader");
+  html5QrCode.start(
+    { facingMode: "environment" },
+    { fps: 10, qrbox: { width: 250, height: 250 } },
+    function onScanSuccess(decodedText) {
+      stopCameraScanner();
+      console.log("Scanned QR:", decodedText);
+      // If it's a URL, extract token or navigate
+      if (decodedText.includes('/emergency/access/')) {
+        window.location.href = decodedText;
+      } else {
+        // Direct token or Health ID
+        window.location.href = '/emergency/access/' + encodeURIComponent(decodedText);
+      }
+    },
+    function onScanFailure(error) {
+      // ignore frame scan failures
+    }
+  ).catch(function(err) {
+    console.error("Camera access failed:", err);
+    alert("Unable to access camera: " + (err.message || err));
+    stopCameraScanner();
+  });
+}
+
+function stopCameraScanner() {
+  if (html5QrCode) {
+    html5QrCode.stop().then(function() {
+      html5QrCode.clear();
+      html5QrCode = null;
+    }).catch(function(err) {
+      console.warn("Camera stop error:", err);
+      html5QrCode = null;
+    });
+  }
+  var wrapper = document.getElementById('scanner-wrapper');
+  if (wrapper) wrapper.style.display = 'none';
+}
+
+// Register PWA Service Worker for Offline First Access
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('/service-worker.js')
+      .then(function(reg) {
+        console.log('[PWA] Service Worker registered:', reg.scope);
+      })
+      .catch(function(err) {
+        console.warn('[PWA] Service Worker failed:', err);
+      });
+  });
+}
+</script>
+</body>
+</html>

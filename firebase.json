@@ -1,0 +1,32 @@
+{
+  "hosting": {
+    "public": "public",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/emergency/access/**",
+        "destination": "/emergency.html"
+      },
+      {
+        "source": "/admin**",
+        "destination": "/admin.html"
+      },
+      {
+        "source": "/doctor**",
+        "destination": "/doctor.html"
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
+}

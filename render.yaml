@@ -1,0 +1,81 @@
+services:
+  - type: web
+    name: medvault-backend-api
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: node server.js
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: FRONTEND_URL
+        value: https://digital-health-id-8a079.web.app
+
+      # ── Database (TiDB Cloud) ──────────────────────────────────
+      - key: DB_HOST
+        value: gateway01.ap-southeast-1.prod.aws.tidbcloud.com
+      - key: DB_PORT
+        value: "4000"
+      - key: DB_USER
+        value: REPLACE_WITH_YOUR_DB_USER
+      - key: DB_PASSWORD
+        value: REPLACE_WITH_YOUR_DB_PASSWORD
+      - key: DB_NAME
+        value: health_id_system
+      - key: DB_SSL
+        value: "true"
+
+      # ── JWT ───────────────────────────────────────────────────
+      - key: JWT_SECRET
+        value: REPLACE_WITH_STRONG_JWT_SECRET
+      - key: JWT_REFRESH_SECRET
+        value: REPLACE_WITH_STRONG_JWT_REFRESH_SECRET
+
+      # ── Cloudinary ────────────────────────────────────────────
+      - key: CLOUDINARY_CLOUD_NAME
+        value: REPLACE_WITH_CLOUDINARY_CLOUD_NAME
+      - key: CLOUDINARY_API_KEY
+        value: REPLACE_WITH_CLOUDINARY_API_KEY
+      - key: CLOUDINARY_API_SECRET
+        value: REPLACE_WITH_CLOUDINARY_API_SECRET
+
+      # ── Resend Email ──────────────────────────────────────────
+      - key: RESEND_API_KEY
+        value: REPLACE_WITH_RESEND_API_KEY
+      - key: EMAIL_FROM
+        value: "MedVault <onboarding@resend.dev>"
+
+      # ── MSG91 SMS ─────────────────────────────────────────────
+      - key: MSG91_AUTH_KEY
+        value: REPLACE_WITH_MSG91_AUTH_KEY
+      - key: MSG91_TEMPLATE_ID
+        value: REPLACE_WITH_MSG91_TEMPLATE_ID
+      - key: MSG91_FLOW_ID
+        value: REPLACE_WITH_MSG91_FLOW_ID
+      - key: MSG91_SENDER_ID
+        value: MEDVLT
+
+      # ── Gemini AI ─────────────────────────────────────────────
+      - key: GEMINI_API_KEY
+        value: REPLACE_WITH_GEMINI_API_KEY
+
+      # ── Google OAuth ──────────────────────────────────────────
+      - key: GOOGLE_FIT_CLIENT_ID
+        value: REPLACE_WITH_GOOGLE_CLIENT_ID
+
+      # ── Admin Portal ──────────────────────────────────────────
+      - key: ADMIN_EMAIL
+        value: admin@medvault.health
+      - key: ADMIN_PASSWORD
+        value: REPLACE_WITH_STRONG_ADMIN_PASSWORD
+
+      # ── Rate Limiting ─────────────────────────────────────────
+      - key: RATE_LIMIT_WINDOW_MS
+        value: "3600000"
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: "1000"

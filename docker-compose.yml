@@ -1,0 +1,56 @@
+# ============================================================
+# MEDVAULT — DOCKER COMPOSE ORCHESTRATION
+# Complete local & staging multi-container stack
+# ============================================================
+
+
+services:
+  # Main MedVault Application (Node.js + Express + WebSockets)
+  medvault-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: medvault-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    depends_on:
+      - redis
+    networks:
+      - medvault-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # In-memory Redis Cache (for session caching & rate limiting)
+  redis:
+    image: redis:7-alpine
+    container_name: medvault-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - medvault-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  medvault-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+    driver: local

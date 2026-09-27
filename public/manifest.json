@@ -1,0 +1,16 @@
+{
+  "name": "MedVault Emergency Health ID",
+  "short_name": "MedVault",
+  "description": "Instant offline-ready emergency medical summary and QR access platform",
+  "start_url": "/emergency/access/demo",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#dc2626",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}

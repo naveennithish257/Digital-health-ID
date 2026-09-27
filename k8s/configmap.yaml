@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: medvault-config
+  namespace: medvault
+  labels:
+    app: medvault
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  FRONTEND_URL: "https://digital-health-id-8a079.web.app"
+  DB_HOST: "gateway01.ap-southeast-1.prod.aws.tidbcloud.com"
+  DB_PORT: "4000"
+  DB_NAME: "health_id_system"
+  DB_SSL: "true"
+  CLOUDINARY_CLOUD_NAME: "lcuudulv"
+  EMAIL_FROM: "MedVault <onboarding@resend.dev>"
+  RATE_LIMIT_WINDOW_MS: "3600000"
+  RATE_LIMIT_MAX_REQUESTS: "1000"

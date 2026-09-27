@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedVault - Digital Health ID System</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Loading Screen -->
+        <div id="loadingScreen" class="loading-screen">
+            <div class="loading-content">
+                <div class="logo-mark pulse">H+</div>
+                <p>MedVault</p>
+                <div class="loading-spinner"></div>
+            </div>
+        </div>
+
+        <!-- Auth Container (shown when not logged in) -->
+        <div id="authContainer" class="auth-container hidden">
+            <div class="auth-card">
+                <div class="auth-logo">
+                    <div class="logo-mark">H+</div>
+                    <h1 class="auth-title">MedVault</h1>
+                    <p class="auth-subtitle">Secure Digital Health Records</p>
+                </div>
+
+                <div class="tabs">
+                    <button id="tabLogin" class="tab active" onclick="switchAuthTab('login')">Login</button>
+                    <button id="tabRegister" class="tab" onclick="switchAuthTab('register')">Register</button>
+                </div>
+
+                <!-- Login Form -->
+                <form id="loginForm" class="auth-form">
+                    <div class="form-group">
+                        <label class="form-label">Health ID</label>
+                        <input type="text" class="form-input" id="loginHealthId" placeholder="HID-2026-12345" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Phone Number</label>
+                        <input type="tel" class="form-input" id="loginPhone" placeholder="+91 98765 43210" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block">Send OTP</button>
+                    <div style="margin-top: 14px; text-align: center;">
+                        <button type="button" class="btn btn-secondary btn-block" onclick="instantDemoLogin()" style="border: 1px dashed var(--accent-primary, #3b82f6); background: rgba(59,130,246,0.08); color: var(--accent-primary, #3b82f6);">
+                            ⚡ Instant Demo Login
+                        </button>
+                    </div>
+                    <div style="margin-top: 18px; display: flex; justify-content: space-between; font-size: 0.8rem;">
+                        <a href="/admin" target="_blank" style="color: var(--text-tertiary, #94a3b8); text-decoration: none;">🛡️ Admin Portal</a>
+                        <a href="#" onclick="showDoctorModal()" style="color: var(--text-tertiary, #94a3b8); text-decoration: none;">👨‍⚕️ Doctor Login</a>
+                    </div>
+                </form>
+
+                <!-- OTP Verification -->
+                <form id="otpForm" class="auth-form hidden">
+                    <div class="alert alert-info">
+                        <span>📱</span>
+                        <span>OTP sent to your phone</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Enter OTP</label>
+                        <div class="otp-container">
+                            <input type="text" class="otp-input" maxlength="1" data-index="0">
+                            <input type="text" class="otp-input" maxlength="1" data-index="1">
+                            <input type="text" class="otp-input" maxlength="1" data-index="2">
+                            <input type="text" class="otp-input" maxlength="1" data-index="3">
+                            <input type="text" class="otp-input" maxlength="1" data-index="4">
+                            <input type="text" class="otp-input" maxlength="1" data-index="5">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block">Verify & Login</button>
+                    <button type="button" class="btn btn-ghost btn-block mt-md" onclick="resendOTP()">Resend OTP</button>
+                </form>
+
+                <!-- Registration Form -->
+                <form id="registerForm" class="auth-form hidden">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label">Full Name *</label>
+                            <input type="text" class="form-input" id="regName" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Date of Birth *</label>
+                            <input type="date" class="form-input" id="regDOB" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Gender *</label>
+                            <select class="form-select" id="regGender" required>
+                                <option value="">Select Gender</option>
+                                <option value="Male">Male</option>
+                                <option value="Female">Female</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Blood Group *</label>
+                            <select class="form-select" id="regBloodGroup" required>
+                                <option value="">Select Blood Group</option>
+                                <option value="A+">A+</option>
+                                <option value="A-">A-</option>
+                                <option value="B+">B+</option>
+                                <option value="B-">B-</option>
+                                <option value="AB+">AB+</option>
+                                <option value="AB-">AB-</option>
+                                <option value="O+">O+</option>
+                                <option value="O-">O-</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Phone Number *</label>
+                            <input type="tel" class="form-input" id="regPhone" placeholder="+91 XXXXX XXXXX" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Email</label>
+                            <input type="email" class="form-input" id="regEmail">
+                        </div>
+                        <div class="form-group full-width">
+                            <label class="form-label">Address</label>
+                            <textarea class="form-textarea" id="regAddress" rows="2"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Allergies</label>
+                            <input type="text" class="form-input" id="regAllergies" placeholder="e.g., Penicillin">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Chronic Conditions</label>
+                            <input type="text" class="form-input" id="regConditions" placeholder="e.g., Diabetes">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Emergency Contact Name</label>
+                            <input type="text" class="form-input" id="regEmergencyName">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Emergency Contact Phone</label>
+                            <input type="tel" class="form-input" id="regEmergencyPhone">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block">Register & Get Health ID</button>
+                </form>
+
+                <!-- Registration Success -->
+                <div id="registrationSuccess" class="auth-form hidden">
+                    <div class="success-icon">✓</div>
+                    <h2 class="text-center mt-lg">Registration Successful!</h2>
+                    <p class="text-center text-tertiary mt-md">Your Health ID has been created</p>
+                    <div class="health-id-display mt-lg">
+                        <span id="newHealthId">HID-2026-12345</span>
+                    </div>
+                    <p class="text-center text-tertiary text-sm mt-md">Please save this ID for future login</p>
+                    <button type="button" class="btn btn-primary btn-block mt-lg" onclick="proceedToLogin()">Proceed to Login</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main App Container (shown when logged in) -->
+        <div id="appContainer" class="app-container hidden">
+            <!-- Sidebar -->
+            <aside class="sidebar" id="sidebar">
+                <div class="sidebar-header">
+                    <div class="logo">
+                        <div class="logo-mark">H+</div>
+                        <span class="logo-text">MedVault</span>
+                    </div>
+                </div>
+                <nav class="sidebar-nav">
+                    <div class="nav-section">
+                        <div class="nav-section-title">Main</div>
+                        <ul class="nav-list">
+                            <li class="nav-item">
+                                <a href="#" class="nav-link active" data-section="dashboard">
+                                    <span class="nav-icon">📊</span>
+                                    Dashboard
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="records">
+                                    <span class="nav-icon">📋</span>
+                                    Medical Records
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="prescriptions">
+                                    <span class="nav-icon">💊</span>
+                                    Prescriptions
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="vitals">
+                                    <span class="nav-icon">❤️</span>
+                                    Vital Signs
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="appointments">
+                                    <span class="nav-icon">📅</span>
+                                    Appointments
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="nav-section">
+                        <div class="nav-section-title">Health ID</div>
+                        <ul class="nav-list">
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="healthid">
+                                    <span class="nav-icon">🆔</span>
+                                    My Health ID
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="emergency">
+                                    <span class="nav-icon">🚨</span>
+                                    Emergency Access
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="consent">
+                                    <span class="nav-icon">🛡️</span>
+                                    Consent & Sharing
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="assistant">
+                                    <span class="nav-icon">🤖</span>
+                                    AI Health Assistant
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="notifications">
+                                    <span class="nav-icon">🔔</span>
+                                    Notifications & Alerts
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="nav-section">
+                        <div class="nav-section-title">Settings</div>
+                        <ul class="nav-list">
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="profile">
+                                    <span class="nav-icon">👤</span>
+                                    Profile
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="settings">
+                                    <span class="nav-icon">⚙️</span>
+                                    Settings
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                </nav>
+                <div class="sidebar-footer">
+                    <div class="user-profile">
+                        <div class="user-avatar" id="userAvatar">JD</div>
+                        <div class="user-info">
+                            <div class="user-name" id="userName">John Doe</div>
+                            <div class="user-role">Patient</div>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Main Content -->
+            <main class="main-content">
+                <header class="header">
+                    <button class="btn btn-ghost btn-icon mobile-menu" onclick="toggleSidebar()">☰</button>
+                    <h1 class="header-title" id="pageTitle">Dashboard</h1>
+                    <div class="header-actions">
+                        <a href="/admin" target="_blank" class="btn btn-ghost" style="text-decoration:none;font-size:0.85rem;" title="Admin Portal">🛡️ Admin</a>
+                        <button class="btn btn-primary" onclick="API.patient.downloadHealthPassport()" style="background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;display:inline-flex;align-items:center;gap:6px;" title="Download Official Health Passport PDF">
+                            <span>📄</span>
+                            <span>Passport PDF</span>
+                        </button>
+                        <button class="btn btn-secondary" onclick="openModal('addRecord')">+ Add Record</button>
+
+                        <!-- Notification Bell -->
+                        <div class="notif-bell-wrapper" id="notifBellWrapper">
+                            <button class="btn btn-ghost btn-icon notif-bell-btn" id="notifBellBtn" onclick="toggleNotifPanel()" title="Notifications" aria-label="Notifications">
+                                🔔
+                                <span class="notif-badge" id="notifBadge" style="display:none;">0</span>
+                            </button>
+
+                            <!-- Notification Dropdown Panel -->
+                            <div class="notif-panel" id="notifPanel">
+                                <div class="notif-panel-header">
+                                    <span style="font-size:14px;font-weight:700;">🔔 Notifications</span>
+                                    <button class="notif-mark-all-btn" id="notifMarkAllBtn" onclick="markAllNotifsRead()">Mark all read</button>
+                                </div>
+                                <div class="notif-list" id="notifList">
+                                    <div class="notif-empty" id="notifEmpty">
+                                        <div style="font-size:32px;margin-bottom:8px;">🔕</div>
+                                        <div style="font-size:13px;color:var(--text-secondary);font-weight:500;">No new notifications</div>
+                                        <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;">You'll be alerted when a doctor or hospital accesses your records</div>
+                                    </div>
+                                </div>
+                                <div class="notif-panel-footer">
+                                    <button onclick="navigateTo('notifications');toggleNotifPanel(false);" style="background:none;border:none;color:#6366f1;font-size:12px;font-weight:600;cursor:pointer;padding:4px 0;">View all activity →</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-ghost btn-icon" onclick="logout()" title="Logout">⏻</button>
+                    </div>
+                </header>
+
+                <div class="content" id="mainContent">
+                    <!-- Content will be dynamically loaded here -->
+                </div>
+            </main>
+        </div>
+
+        <!-- Modal Overlay -->
+        <div class="modal-overlay" id="modalOverlay">
+            <div class="modal" id="modalContent">
+                <!-- Modal content will be dynamically loaded -->
+            </div>
+        </div>
+
+        <!-- Toast Notifications -->
+        <div id="toastContainer" class="toast-container"></div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="/js/api.js?v=2.0.4"></script>
+    <script src="/js/app.js?v=2.0.4"></script>
+</body>
+</html>
