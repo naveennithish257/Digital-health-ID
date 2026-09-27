@@ -148,7 +148,9 @@ async function sendEmail(to, subject, html) {
  * Falls back to console logging in development.
  */
 async function sendSMSOTP(phoneNumber, otp) {
-    const phone = phoneNumber.replace(/^\+/, "");
+    if (!phoneNumber) return { success: false, mode: "skip", reason: "no phone" };
+    const rawPhone = phoneNumber.replace(/^\+/, "");
+    const phone = rawPhone.startsWith("91") ? rawPhone : `91${rawPhone}`;
     if (!process.env.MSG91_AUTH_KEY) {
         console.log(`[SMS DEV] 📱 OTP for ${phoneNumber}: ${otp}`);
         return { success: true, mode: "dev", otp };
@@ -156,13 +158,15 @@ async function sendSMSOTP(phoneNumber, otp) {
     try {
         const response = await axios.post(
             "https://api.msg91.com/api/v5/otp",
+            null,
             {
-                template_id: process.env.MSG91_TEMPLATE_ID,
-                mobile:      phone,
-                authkey:     process.env.MSG91_AUTH_KEY,
-                otp:         otp
-            },
-            { headers: { "Content-Type": "application/json" } }
+                params: {
+                    template_id: process.env.MSG91_TEMPLATE_ID,
+                    mobile:      phone,
+                    authkey:     process.env.MSG91_AUTH_KEY,
+                    otp:         otp
+                }
+            }
         );
         console.log(`[MSG91 OTP] ✅ Sent to ${phoneNumber}. Response:`, response.data?.type);
         return { success: true, mode: "msg91", response: response.data };
@@ -182,22 +186,32 @@ async function sendSMSOTP(phoneNumber, otp) {
  * @param {string} message      - The text message content
  */
 async function sendSMSAlert(phoneNumber, message) {
-    const phone = phoneNumber.replace(/^\+/, "");
-    if (!process.env.MSG91_AUTH_KEY) {
-        console.log(`[SMS ALERT DEV] 📲 To ${phoneNumber}: ${message}`);
-        return { success: true, mode: "dev" };
+    if (!phoneNumber) return { success: false, mode: "skip", reason: "no phone" };
+    const rawPhone = phoneNumber.replace(/^\+/, "");
+    const phone = rawPhone.startsWith("91") ? rawPhone : `91${rawPhone}`;
+    if (!process.env.MSG91_AUTH_KEY || !process.env.MSG91_FLOW_ID) {
+        console.log(`[SMS ALERT] 📲 To ${phoneNumber}: ${message}`);
+        return { success: true, mode: "logged" };
     }
     try {
         const response = await axios.post(
             "https://api.msg91.com/api/v5/flow/",
             {
-                flow_id:   process.env.MSG91_FLOW_ID || process.env.MSG91_TEMPLATE_ID,
-                sender:    process.env.MSG91_SENDER_ID || "MEDVLT",
-                mobiles:   `91${phone}`,
-                authkey:   process.env.MSG91_AUTH_KEY,
-                VAR1:      message.substring(0, 150)
+                template_id: process.env.MSG91_FLOW_ID,
+                short_url: "0",
+                recipients: [
+                    {
+                        mobiles: phone,
+                        VAR1: message.substring(0, 150)
+                    }
+                ]
             },
-            { headers: { "Content-Type": "application/json" } }
+            {
+                headers: {
+                    "Content-Type": "application/json",
+                    "authkey": process.env.MSG91_AUTH_KEY
+                }
+            }
         );
         console.log(`[MSG91 ALERT] ✅ Sent to ${phoneNumber}`);
         return { success: true, mode: "msg91", response: response.data };
