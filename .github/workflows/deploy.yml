@@ -61,10 +61,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
+      - name: Create k8s Kind Cluster
+        uses: helm/kind-action@v1
 
       - name: Dry-Run Validate K8s Manifests
         run: |
