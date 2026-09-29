@@ -149,8 +149,8 @@ async function sendEmail(to, subject, html) {
  */
 async function sendSMSOTP(phoneNumber, otp) {
     if (!phoneNumber) return { success: false, mode: "skip", reason: "no phone" };
-    const rawPhone = phoneNumber.replace(/^\+/, "");
-    const phone = rawPhone.startsWith("91") ? rawPhone : `91${rawPhone}`;
+    const rawDigits = phoneNumber.replace(/[^0-9]/g, "");
+    const phone = rawDigits.startsWith("91") && rawDigits.length > 10 ? rawDigits : `91${rawDigits.slice(-10)}`;
     if (!process.env.MSG91_AUTH_KEY || !process.env.MSG91_TEMPLATE_ID) {
         console.log(`[SMS DEV] 📱 OTP for ${phoneNumber}: ${otp}`);
         return { success: true, mode: "dev", otp };
@@ -173,7 +173,8 @@ async function sendSMSOTP(phoneNumber, otp) {
                 headers: {
                     "Content-Type": "application/json",
                     "authkey":      process.env.MSG91_AUTH_KEY
-                }
+                },
+                timeout: 5000
             }
         );
         console.log(`[MSG91 OTP] ✅ Sent to ${phoneNumber}. Response:`, response.data?.type || response.data?.message);
@@ -185,6 +186,7 @@ async function sendSMSOTP(phoneNumber, otp) {
         return { success: false, mode: "fallback", error: errMsg };
     }
 }
+
 
 /**
  * Send a transactional SMS alert via MSG91 Campaign API or Flow API.
@@ -674,10 +676,23 @@ app.post("/api/auth/send-otp", [
 ], async (req, res) => {
     try {
         const { health_id, phone_number } = req.body;
-        const [pts] = await pool.query("SELECT patient_id FROM patients WHERE health_id=? AND phone_number=?", [health_id, phone_number]);
+        const cleanPhone = phone_number.replace(/\s+/g, "");
+
+        // Demo shortcut for default demo ID
+        if (health_id === "HID-2026-99999") {
+            return res.json({
+                status: "success",
+                message: "Demo OTP sent. Use 123456 to login.",
+                data: { otp_expiry: new Date(Date.now() + 600000) }
+            });
+        }
+
+        const [pts] = await pool.query(
+            "SELECT patient_id, full_name, email, phone_number FROM patients WHERE health_id=? AND REPLACE(phone_number, ' ', '')=?",
+            [health_id, cleanPhone]
+        );
         if (!pts.length) {
-            // Check if demo user
-            if (health_id === "HID-2026-99999" || health_id.startsWith("HID-")) {
+            if (health_id.startsWith("HID-2026-99")) {
                 return res.json({ status:"success", message:"Demo OTP sent. Use 123456 to login.", data:{ otp_expiry: new Date(Date.now() + 600000) } });
             }
             return res.status(404).json({ status:"error", error:{ code:"NOT_FOUND", message:"Health ID or phone not found" } });
@@ -687,13 +702,32 @@ app.post("/api/auth/send-otp", [
         const exp = new Date(Date.now() + 10*60*1000);
         await pool.query(
             "INSERT INTO authentication (auth_id,user_id,user_type,phone_number,otp,otp_expiry) VALUES (?,?,'Patient',?,?,?) ON DUPLICATE KEY UPDATE otp=?,otp_expiry=?,failed_login_attempts=0",
-            [crypto.randomUUID(), pts[0].patient_id, phone_number, otp, exp, otp, exp]
+            [crypto.randomUUID(), pts[0].patient_id, pts[0].phone_number || phone_number, otp, exp, otp, exp]
         );
-        await sendSMSOTP(phone_number, otp);
-        res.json({ status:"success", message:"OTP sent", data:{ otp_expiry:exp } });
+        
+        await sendSMSOTP(cleanPhone, otp);
+
+        if (pts[0].email) {
+            await sendEmail(
+                pts[0].email,
+                "MedVault - Your Login Verification OTP",
+                `<div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                    <h2 style="color: #2563eb; margin-top: 0;">MedVault Verification Code</h2>
+                    <p>Hello <b>${pts[0].full_name || 'Patient'}</b>,</p>
+                    <p>Your one-time login verification code is:</p>
+                    <div style="background: #eff6ff; padding: 15px; text-align: center; border-radius: 6px; margin: 20px 0;">
+                        <span style="font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #1d4ed8;">${otp}</span>
+                    </div>
+                    <p style="color: #64748b; font-size: 14px;">This code is valid for 10 minutes. Do not share this code with anyone.</p>
+                </div>`
+            );
+        }
+
+        const deliveryMsg = pts[0].email ? "OTP sent to your registered phone and email." : "OTP sent to your registered phone.";
+        res.json({ status:"success", message: deliveryMsg, data:{ otp_expiry: exp } });
     } catch (e) {
-        // Dev fallback
-        res.json({ status:"success", message:"Demo OTP sent. Use 123456 to login.", data:{ otp_expiry: new Date(Date.now() + 600000) } });
+        console.error("send-otp error:", e.message);
+        res.status(500).json({ status:"error", error:{ code:"INTERNAL_ERROR", message: "Failed to send OTP" } });
     }
 });
 
@@ -878,11 +912,22 @@ app.post("/api/auth/doctor/send-otp", [
 ], async (req, res) => {
     try {
         const { license_number, phone_number } = req.body;
+        const cleanPhone = phone_number.replace(/\s+/g, "");
+
+        // Demo license fallback
+        if (license_number === "MCI-2026-10001" || license_number === "MCI-DL-67842") {
+            return res.json({ status:"success", message:"Doctor demo OTP sent (use 123456)", data:{ otp_expiry: new Date(Date.now() + 600000) } });
+        }
+
         const [docs] = await pool.query(
-            "SELECT doctor_id,verification_status FROM doctors WHERE license_number=? AND phone_number=?",
-            [license_number, phone_number]
+            "SELECT doctor_id, full_name, email, phone_number, verification_status FROM doctors WHERE license_number=? AND REPLACE(phone_number, ' ', '')=?",
+            [license_number, cleanPhone]
         );
         if (!docs.length) {
+            // Check if demo doctor
+            if (license_number.startsWith("MCI-")) {
+                return res.json({ status:"success", message:"Doctor demo OTP sent (use 123456)", data:{ otp_expiry: new Date(Date.now() + 600000) } });
+            }
             return res.status(404).json({ status:"error", error:{ code:"NOT_FOUND", message:"Doctor record not found" } });
         }
         if (docs[0].verification_status === "Pending")  return res.status(403).json({ status:"error", error:{ code:"PENDING_VERIFICATION", message:"Account is pending admin verification" } });
@@ -892,10 +937,28 @@ app.post("/api/auth/doctor/send-otp", [
         const exp = new Date(Date.now() + 10*60*1000);
         await pool.query(
             "INSERT INTO authentication (auth_id,user_id,user_type,phone_number,otp,otp_expiry) VALUES (?,?,'Doctor',?,?,?) ON DUPLICATE KEY UPDATE otp=?,otp_expiry=?,failed_login_attempts=0",
-            [crypto.randomUUID(), docs[0].doctor_id, phone_number, otp, exp, otp, exp]
+            [crypto.randomUUID(), docs[0].doctor_id, docs[0].phone_number || phone_number, otp, exp, otp, exp]
         );
-        await sendSMSOTP(phone_number, otp);
-        res.json({ status:"success", message:"OTP sent", data:{ otp_expiry:exp } });
+        await sendSMSOTP(cleanPhone, otp);
+
+        if (docs[0].email) {
+            await sendEmail(
+                docs[0].email,
+                "MedVault - Doctor Portal Verification OTP",
+                `<div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                    <h2 style="color: #0d9488; margin-top: 0;">MedVault Doctor Verification</h2>
+                    <p>Hello <b>${docs[0].full_name || 'Doctor'}</b>,</p>
+                    <p>Your one-time portal login verification code is:</p>
+                    <div style="background: #f0fdfa; padding: 15px; text-align: center; border-radius: 6px; margin: 20px 0;">
+                        <span style="font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #0f766e;">${otp}</span>
+                    </div>
+                    <p style="color: #64748b; font-size: 14px;">This code is valid for 10 minutes. Do not share this code with anyone.</p>
+                </div>`
+            );
+        }
+
+        const msg = docs[0].email ? "OTP sent to your registered phone and email." : "OTP sent to your registered phone.";
+        res.json({ status:"success", message: msg, data:{ otp_expiry:exp } });
     } catch (e) {
         res.json({ status:"success", message:"Doctor demo OTP sent (use 123456)", data:{ otp_expiry: new Date(Date.now() + 600000) } });
     }
