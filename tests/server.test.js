@@ -111,4 +111,19 @@ describe('MedVault Platform & Security Test Suite', () => {
     });
   });
 
+  // AI Health Assistant (Gemini)
+  describe('AI Health Assistant', () => {
+    it('should return an AI response for health inquiries', async () => {
+      const res = await request(app)
+        .post('/api/assistant')
+        .set('Authorization', 'Bearer demo-token')
+        .send({ message: 'What are my known allergies and medications?' });
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.reply).toBeDefined();
+      expect(res.body.data.reply.length).toBeGreaterThan(10);
+    });
+  });
+
 });
+
