@@ -155,35 +155,56 @@ async function sendSMSOTP(phoneNumber, otp) {
         console.log(`[SMS DEV] 📱 OTP for ${phoneNumber}: ${otp}`);
         return { success: true, mode: "dev", otp };
     }
+    // 1. Try MSG91 Dedicated OTP API first (Transactional 24x7 Route)
     try {
+        const otpUrl = `https://control.msg91.com/api/v5/otp?template_id=${process.env.MSG91_TEMPLATE_ID}&mobile=${phone}&otp=${otp}&otp_expiry=15`;
         const response = await axios.post(
-            "https://api.msg91.com/api/v5/flow/",
-            {
-                template_id: process.env.MSG91_TEMPLATE_ID,
-                sender:      process.env.MSG91_SENDER_ID || "smsind",
-                short_url:   "0",
-                recipients:  [
-                    {
-                        mobiles: phone,
-                        OTP:     otp
-                    }
-                ]
-            },
+            otpUrl,
+            {},
             {
                 headers: {
                     "Content-Type": "application/json",
-                    "authkey":      process.env.MSG91_AUTH_KEY
+                    "authkey":      process.env.MSG91_AUTH_KEY,
+                    "Accept":       "application/json"
                 },
-                timeout: 5000
+                timeout: 7000
             }
         );
-        console.log(`[MSG91 OTP] ✅ Sent to ${phoneNumber}. Response:`, response.data?.type || response.data?.message);
-        return { success: true, mode: "msg91", response: response.data };
-    } catch (e) {
-        const errMsg = e.response?.data || e.message;
-        console.error(`[MSG91 OTP] ❌ Failed for ${phoneNumber}:`, errMsg);
-        console.log(`[SMS FALLBACK] 📱 OTP for ${phoneNumber}: ${otp}`);
-        return { success: false, mode: "fallback", error: errMsg };
+        console.log(`[MSG91 OTP API] ✅ Sent to ${phoneNumber}. Response:`, response.data?.type || response.data?.message || "OK");
+        return { success: true, mode: "msg91_otp", response: response.data };
+    } catch (otpErr) {
+        console.warn(`[MSG91 OTP API] ⚠️ Retrying via Flow API for ${phoneNumber}:`, otpErr.response?.data?.message || otpErr.message);
+        // 2. Fallback to MSG91 Flow API
+        try {
+            const flowResponse = await axios.post(
+                "https://api.msg91.com/api/v5/flow/",
+                {
+                    template_id: process.env.MSG91_TEMPLATE_ID,
+                    sender:      process.env.MSG91_SENDER_ID || "smsind",
+                    short_url:   "0",
+                    recipients:  [
+                        {
+                            mobiles: phone,
+                            OTP:     otp
+                        }
+                    ]
+                },
+                {
+                    headers: {
+                        "Content-Type": "application/json",
+                        "authkey":      process.env.MSG91_AUTH_KEY
+                    },
+                    timeout: 7000
+                }
+            );
+            console.log(`[MSG91 Flow] ✅ Sent to ${phoneNumber}. Response:`, flowResponse.data?.type || flowResponse.data?.message);
+            return { success: true, mode: "msg91_flow", response: flowResponse.data };
+        } catch (e) {
+            const errMsg = e.response?.data || e.message;
+            console.error(`[MSG91 OTP] ❌ Failed for ${phoneNumber}:`, errMsg);
+            console.log(`[SMS FALLBACK] 📱 OTP for ${phoneNumber}: ${otp}`);
+            return { success: false, mode: "fallback", error: errMsg };
+        }
     }
 }
 
