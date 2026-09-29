@@ -368,10 +368,7 @@ POST /api/government/vaccination
 ## 🤝 Support
 
 ### Contact Information
-- **Technical Support**: support@healthid.gov.in
-- **Emergency Helpline**: 1800-XXX-XXXX
-- **Email**: help@healthid.gov.in
-- **Website**: https://www.healthid.gov.in
+- **Email**: naveennithish257@gmail.com
 
 ### Documentation
 - User Manual: Available in dashboard
