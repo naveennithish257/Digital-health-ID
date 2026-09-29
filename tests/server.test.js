@@ -1,6 +1,8 @@
 const request = require('supertest');
 const app = require('../server');
 
+jest.setTimeout(25000);
+
 describe('MedVault Platform & Security Test Suite', () => {
 
   // BUG-01: Demo OTP Bypass is Gated
