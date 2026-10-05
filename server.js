@@ -257,90 +257,97 @@ async function sendTwilioSMS(toPhone, messageBody) {
 }
 
 /**
- * Send an OTP via Fast2SMS, Twilio, or MSG91 v5 OTP API.
- * Falls back to console logging in development.
+ * Send an OTP via MSG91 v5 OTP API (primary), Fast2SMS or Twilio (fallbacks).
+ * MSG91 is used first as Fast2SMS requires website verification for OTP route.
  */
 async function sendSMSOTP(phoneNumber, otp) {
     if (!phoneNumber) return { success: false, mode: "skip", reason: "no phone" };
 
-    // 1. Try Fast2SMS first (Instant Indian mobile OTP - Zero DLT blocks)
+    // Normalize phone to digits only, format as 91XXXXXXXXXX for MSG91/Fast2SMS
+    const rawDigits = phoneNumber.replace(/[^0-9]/g, "");
+    const phone10   = rawDigits.slice(-10);
+    const phone91   = "91" + phone10; // MSG91 / Fast2SMS format (no + prefix)
+    const phoneE164 = "+" + phone91;  // E.164 for Twilio
+
+    // 1. Primary: MSG91 Dedicated OTP API v5 (confirmed working, no DLT issues)
+    if (process.env.MSG91_AUTH_KEY && process.env.MSG91_TEMPLATE_ID) {
+        try {
+            const otpUrl = "https://control.msg91.com/api/v5/otp?template_id=" +
+                process.env.MSG91_TEMPLATE_ID +
+                "&mobile=" + phone91 +
+                "&otp=" + otp +
+                "&otp_expiry=30";
+            const response = await axios.post(
+                otpUrl,
+                {},
+                {
+                    headers: {
+                        "Content-Type": "application/json",
+                        "authkey":      process.env.MSG91_AUTH_KEY,
+                        "Accept":       "application/json"
+                    },
+                    timeout: 8000
+                }
+            );
+            if (response.data?.type === "success" || response.data?.request_id) {
+                console.log(`[MSG91 OTP] ✅ Sent to ${phoneE164}. ID:`, response.data?.request_id || response.data?.message);
+                return { success: true, mode: "msg91_otp", response: response.data };
+            }
+            console.warn(`[MSG91 OTP] ⚠️ Unexpected response:`, response.data);
+        } catch (msg91Err) {
+            console.warn(`[MSG91 OTP] ⚠️ API failed for ${phoneE164}:`, msg91Err.response?.data?.message || msg91Err.message);
+            // Try MSG91 Flow API as secondary fallback
+            try {
+                const flowResponse = await axios.post(
+                    "https://api.msg91.com/api/v5/flow/",
+                    {
+                        template_id: process.env.MSG91_TEMPLATE_ID,
+                        sender:      process.env.MSG91_SENDER_ID || "MEDVLT",
+                        short_url:   "0",
+                        recipients:  [{ mobiles: phone91, OTP: otp }]
+                    },
+                    {
+                        headers: {
+                            "Content-Type": "application/json",
+                            "authkey":      process.env.MSG91_AUTH_KEY
+                        },
+                        timeout: 8000
+                    }
+                );
+                if (flowResponse.data?.type === "success" || flowResponse.data?.message) {
+                    console.log(`[MSG91 Flow] ✅ Sent to ${phoneE164}. Response:`, flowResponse.data?.message);
+                    return { success: true, mode: "msg91_flow", response: flowResponse.data };
+                }
+            } catch (flowErr) {
+                console.error(`[MSG91 Flow] ❌ Failed for ${phoneE164}:`, flowErr.response?.data || flowErr.message);
+            }
+        }
+    }
+
+    // 2. Fallback: Fast2SMS (requires OTP route website verification — may block)
     if (process.env.FAST2SMS_API_KEY) {
         try {
             const fastRes = await sendFast2SMSOTP(phoneNumber, otp);
             if (fastRes.success) return fastRes;
+            console.warn("[Fast2SMS] ⚠️ Returned failure:", fastRes.error);
         } catch (fastErr) {
             console.warn("[Fast2SMS] ⚠️ Error:", fastErr.message);
         }
     }
 
-    // 2. Try Twilio (Direct global SMS delivery)
+    // 3. Fallback: Twilio (Global SMS delivery)
     if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
         try {
-            const twilioRes = await sendTwilioSMS(phoneNumber, `Your MedVault verification code is: ${otp}. Valid for 30 minutes. Do not share this code.`);
+            const twilioRes = await sendTwilioSMS(phoneE164, `Your MedVault verification code is: ${otp}. Valid for 30 minutes. Do not share this code.`);
             if (twilioRes.success) return twilioRes;
         } catch (twilioErr) {
             console.warn("[Twilio SMS] ⚠️ Error:", twilioErr.response?.data?.message || twilioErr.message);
         }
     }
 
-    const rawDigits = phoneNumber.replace(/[^0-9]/g, "");
-    const phone = rawDigits.startsWith("91") && rawDigits.length > 10 ? rawDigits : `91${rawDigits.slice(-10)}`;
-    if (!process.env.MSG91_AUTH_KEY || !process.env.MSG91_TEMPLATE_ID) {
-        console.log(`[SMS DEV] 📱 OTP for ${phoneNumber}: ${otp}`);
-        return { success: true, mode: "dev", otp };
-    }
-
-    // 3. Fallback to MSG91 Dedicated OTP API
-    try {
-        const otpUrl = `https://control.msg91.com/api/v5/otp?template_id=${process.env.MSG91_TEMPLATE_ID}&mobile=${phone}&otp=${otp}&otp_expiry=30`;
-        const response = await axios.post(
-            otpUrl,
-            {},
-            {
-                headers: {
-                    "Content-Type": "application/json",
-                    "authkey":      process.env.MSG91_AUTH_KEY,
-                    "Accept":       "application/json"
-                },
-                timeout: 7000
-            }
-        );
-        console.log(`[MSG91 OTP API] ✅ Sent to ${phoneNumber}. Response:`, response.data?.type || response.data?.message || "OK");
-        return { success: true, mode: "msg91_otp", response: response.data };
-    } catch (otpErr) {
-        console.warn(`[MSG91 OTP API] ⚠️ Retrying via Flow API for ${phoneNumber}:`, otpErr.response?.data?.message || otpErr.message);
-        // 4. Fallback to MSG91 Flow API
-        try {
-            const flowResponse = await axios.post(
-                "https://api.msg91.com/api/v5/flow/",
-                {
-                    template_id: process.env.MSG91_TEMPLATE_ID,
-                    sender:      process.env.MSG91_SENDER_ID || "smsind",
-                    short_url:   "0",
-                    recipients:  [
-                        {
-                            mobiles: phone,
-                            OTP:     otp
-                        }
-                    ]
-                },
-                {
-                    headers: {
-                        "Content-Type": "application/json",
-                        "authkey":      process.env.MSG91_AUTH_KEY
-                    },
-                    timeout: 7000
-                }
-            );
-            console.log(`[MSG91 Flow] ✅ Sent to ${phoneNumber}. Response:`, flowResponse.data?.type || flowResponse.data?.message);
-            return { success: true, mode: "msg91_flow", response: flowResponse.data };
-        } catch (e) {
-            const errMsg = e.response?.data || e.message;
-            console.error(`[MSG91 OTP] ❌ Failed for ${phoneNumber}:`, errMsg);
-            console.log(`[SMS FALLBACK] 📱 OTP for ${phoneNumber}: ${otp}`);
-            return { success: false, mode: "fallback", error: errMsg };
-        }
-    }
+    // 4. Dev fallback: log OTP to console
+    console.log(`[SMS FALLBACK] 📱 OTP for ${phoneE164}: ${otp}`);
+    return { success: false, mode: "fallback", otp, reason: "all_providers_failed" };
 }
 
 
