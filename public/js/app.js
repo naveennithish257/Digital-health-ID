@@ -195,7 +195,11 @@ async function handleLogin(e) {
         elements.loginForm.classList.add('hidden');
         elements.otpForm.classList.remove('hidden');
 
-        showToast(result?.message || '✉️ OTP sent! Check your registered phone and email.', 'success');
+        if (result?.data?.otp) {
+            showToast(`🔑 Your OTP is: ${result.data.otp} (also sent to email)`, 'success');
+        } else {
+            showToast(result?.message || '✉️ OTP sent! Check your registered phone and email.', 'success');
+        }
     } catch (error) {
         showToast(error.message || 'Failed to send OTP. Check your Health ID and phone number.', 'error');
     } finally {
@@ -295,7 +299,11 @@ async function resendOTP() {
         const firstOtpInput = document.querySelector('.otp-input');
         if (firstOtpInput) firstOtpInput.focus();
 
-        showToast(res.message || '✉️ New OTP sent to your registered phone and email.', 'success');
+        if (res?.data?.otp) {
+            showToast(`🔑 Your new OTP is: ${res.data.otp} (also sent to email)`, 'success');
+        } else {
+            showToast(res?.message || '✉️ New OTP sent to your registered phone and email.', 'success');
+        }
     } catch (err) {
         showToast(err.message || 'Failed to resend OTP. Please try again.', 'error');
     }

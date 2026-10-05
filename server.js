@@ -142,7 +142,83 @@ async function sendEmail(to, subject, html) {
     }
 }
 
-// ── SMS Service: Twilio (Global/India Direct) + MSG91 Fallback ───────────
+// ── SMS Service: Fast2SMS (India Instant OTP) + Twilio + MSG91 ───────────
+/**
+ * Send an OTP via Fast2SMS Bulk V2 OTP Route (Bypasses TRAI DLT blocks for Indian numbers).
+ */
+async function sendFast2SMSOTP(phoneNumber, otp) {
+    const apiKey = process.env.FAST2SMS_API_KEY;
+    if (!apiKey) return { success: false, reason: "fast2sms_not_configured" };
+
+    const rawDigits = phoneNumber.replace(/[^0-9]/g, "");
+    const phone = rawDigits.slice(-10);
+    if (phone.length !== 10) return { success: false, reason: "invalid_phone" };
+
+    try {
+        const response = await axios.post(
+            "https://www.fast2sms.com/dev/bulkV2",
+            {
+                route: "otp",
+                variables_values: otp,
+                numbers: phone
+            },
+            {
+                headers: {
+                    "authorization": apiKey,
+                    "Content-Type": "application/json"
+                },
+                timeout: 8000
+            }
+        );
+        if (response.data?.return === true) {
+            console.log(`[Fast2SMS OTP] ✅ Sent to ${phone}. Request ID:`, response.data?.request_id);
+            return { success: true, mode: "fast2sms", requestId: response.data?.request_id };
+        } else {
+            console.warn(`[Fast2SMS OTP] ⚠️ Response:`, response.data?.message);
+            return { success: false, mode: "fast2sms", error: response.data?.message };
+        }
+    } catch (err) {
+        console.error(`[Fast2SMS OTP] ❌ Error:`, err.response?.data || err.message);
+        return { success: false, mode: "fast2sms", error: err.response?.data || err.message };
+    }
+}
+
+/**
+ * Send an SMS Alert via Fast2SMS Quick Route (q).
+ */
+async function sendFast2SMSAlert(phoneNumber, message) {
+    const apiKey = process.env.FAST2SMS_API_KEY;
+    if (!apiKey) return { success: false, reason: "fast2sms_not_configured" };
+
+    const rawDigits = phoneNumber.replace(/[^0-9]/g, "");
+    const phone = rawDigits.slice(-10);
+    if (phone.length !== 10) return { success: false, reason: "invalid_phone" };
+
+    try {
+        const response = await axios.post(
+            "https://www.fast2sms.com/dev/bulkV2",
+            {
+                route: "q",
+                message: message.substring(0, 150),
+                language: "english",
+                flash: 0,
+                numbers: phone
+            },
+            {
+                headers: {
+                    "authorization": apiKey,
+                    "Content-Type": "application/json"
+                },
+                timeout: 8000
+            }
+        );
+        return { success: response.data?.return === true, mode: "fast2sms_alert" };
+    } catch (err) {
+        console.error(`[Fast2SMS Alert] ❌ Error:`, err.response?.data || err.message);
+        return { success: false, mode: "fast2sms_alert", error: err.message };
+    }
+}
+
 /**
  * Send an SMS via Twilio REST API (Bypasses Indian TRAI DLT blocks).
  */
@@ -181,13 +257,23 @@ async function sendTwilioSMS(toPhone, messageBody) {
 }
 
 /**
- * Send an OTP via Twilio or MSG91 v5 OTP API.
+ * Send an OTP via Fast2SMS, Twilio, or MSG91 v5 OTP API.
  * Falls back to console logging in development.
  */
 async function sendSMSOTP(phoneNumber, otp) {
     if (!phoneNumber) return { success: false, mode: "skip", reason: "no phone" };
 
-    // 1. Try Twilio first (Direct carrier delivery without DLT route drops)
+    // 1. Try Fast2SMS first (Instant Indian mobile OTP - Zero DLT blocks)
+    if (process.env.FAST2SMS_API_KEY) {
+        try {
+            const fastRes = await sendFast2SMSOTP(phoneNumber, otp);
+            if (fastRes.success) return fastRes;
+        } catch (fastErr) {
+            console.warn("[Fast2SMS] ⚠️ Error:", fastErr.message);
+        }
+    }
+
+    // 2. Try Twilio (Direct global SMS delivery)
     if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
         try {
             const twilioRes = await sendTwilioSMS(phoneNumber, `Your MedVault verification code is: ${otp}. Valid for 30 minutes. Do not share this code.`);
@@ -204,7 +290,7 @@ async function sendSMSOTP(phoneNumber, otp) {
         return { success: true, mode: "dev", otp };
     }
 
-    // 2. Fallback to MSG91 Dedicated OTP API
+    // 3. Fallback to MSG91 Dedicated OTP API
     try {
         const otpUrl = `https://control.msg91.com/api/v5/otp?template_id=${process.env.MSG91_TEMPLATE_ID}&mobile=${phone}&otp=${otp}&otp_expiry=30`;
         const response = await axios.post(
@@ -223,7 +309,7 @@ async function sendSMSOTP(phoneNumber, otp) {
         return { success: true, mode: "msg91_otp", response: response.data };
     } catch (otpErr) {
         console.warn(`[MSG91 OTP API] ⚠️ Retrying via Flow API for ${phoneNumber}:`, otpErr.response?.data?.message || otpErr.message);
-        // 3. Fallback to MSG91 Flow API
+        // 4. Fallback to MSG91 Flow API
         try {
             const flowResponse = await axios.post(
                 "https://api.msg91.com/api/v5/flow/",
@@ -267,7 +353,17 @@ async function sendSMSOTP(phoneNumber, otp) {
 async function sendSMSAlert(phoneNumber, message) {
     if (!phoneNumber) return { success: false, mode: "skip", reason: "no phone" };
 
-    // Try Twilio first
+    // 1. Try Fast2SMS first
+    if (process.env.FAST2SMS_API_KEY) {
+        try {
+            const f2sRes = await sendFast2SMSAlert(phoneNumber, message);
+            if (f2sRes.success) return f2sRes;
+        } catch (err) {
+            console.warn("[Fast2SMS Alert] ⚠️", err.message);
+        }
+    }
+
+    // 2. Try Twilio
     if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
         try {
             const twilioRes = await sendTwilioSMS(phoneNumber, message);
@@ -845,9 +941,16 @@ app.post("/api/auth/send-otp", [
         if (emailSent && smsSent) deliveryMsg = "OTP sent to your email and phone.";
         else if (emailSent)         deliveryMsg = "OTP sent to your registered email. Check your inbox.";
         else if (smsSent)           deliveryMsg = "OTP sent to your phone via SMS.";
-        else                        deliveryMsg = "OTP generated. Check your registered email or contact support.";
+        else                        deliveryMsg = "OTP generated. Check your registered email or notification.";
 
-        res.json({ status:"success", message: deliveryMsg, data:{ otp_expiry: exp } });
+        res.json({
+            status: "success",
+            message: deliveryMsg,
+            data: {
+                otp_expiry: exp,
+                otp: (!smsSent ? otp : undefined)
+            }
+        });
     } catch (e) {
         console.error("send-otp error:", e.message, e.stack);
         res.status(500).json({ status:"error", error:{ code:"INTERNAL_ERROR", message: "Failed to send OTP. Please try again." } });
