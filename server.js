@@ -691,64 +691,106 @@ app.post("/api/auth/register", [
 });
 
 app.post("/api/auth/send-otp", [
-    body("health_id").notEmpty(),
-    body("phone_number").matches(/^\+[1-9]\d{1,14}$/),
+    body("health_id").notEmpty().withMessage("Health ID is required"),
+    body("phone_number").notEmpty().withMessage("Phone number is required"),
     handleValidationErrors
 ], async (req, res) => {
     try {
         const { health_id, phone_number } = req.body;
-        const cleanPhone = phone_number.replace(/\s+/g, "");
+
+        // ── Normalize phone to E.164 (+91XXXXXXXXXX) server-side ────────
+        const rawDigits = phone_number.replace(/[^0-9]/g, '');
+        let cleanPhone;
+        if (phone_number.trim().startsWith('+')) {
+            cleanPhone = phone_number.replace(/[\s\-().]/g, '');
+        } else if (rawDigits.length === 10) {
+            cleanPhone = '+91' + rawDigits;
+        } else if (rawDigits.length === 12 && rawDigits.startsWith('91')) {
+            cleanPhone = '+' + rawDigits;
+        } else if (rawDigits.length === 11 && rawDigits.startsWith('0')) {
+            cleanPhone = '+91' + rawDigits.slice(1);
+        } else {
+            cleanPhone = '+91' + rawDigits.slice(-10);
+        }
 
         // Demo shortcut for default demo ID
-        if (health_id === "HID-2026-99999") {
+        if (health_id === "HID-2026-99999" || health_id.startsWith("HID-2026-99")) {
             return res.json({
                 status: "success",
                 message: "Demo OTP sent. Use 123456 to login.",
-                data: { otp_expiry: new Date(Date.now() + 600000) }
+                data: { otp_expiry: new Date(Date.now() + 1800000) }
             });
         }
 
+        // Try match with normalized phone OR stored phone (both formats)
         const [pts] = await pool.query(
-            "SELECT patient_id, full_name, email, phone_number FROM patients WHERE health_id=? AND REPLACE(phone_number, ' ', '')=?",
-            [health_id, cleanPhone]
+            `SELECT patient_id, full_name, email, phone_number FROM patients
+             WHERE health_id=? AND (
+               REPLACE(REPLACE(phone_number,' ',''),'-','') = ?
+               OR CONCAT('+91', RIGHT(REPLACE(phone_number,' ',''),10)) = ?
+               OR phone_number = ?
+             )`,
+            [health_id, cleanPhone.replace(/[^0-9+]/g,''), cleanPhone, cleanPhone]
         );
         if (!pts.length) {
-            if (health_id.startsWith("HID-2026-99")) {
-                return res.json({ status:"success", message:"Demo OTP sent. Use 123456 to login.", data:{ otp_expiry: new Date(Date.now() + 600000) } });
-            }
-            return res.status(404).json({ status:"error", error:{ code:"NOT_FOUND", message:"Health ID or phone not found" } });
+            return res.status(404).json({ status:"error", error:{ code:"NOT_FOUND", message:"Health ID or phone number not found. Make sure phone matches what you registered with." } });
         }
 
         const otp = generateOTP();
-        const exp = new Date(Date.now() + 10*60*1000);
+        const exp = new Date(Date.now() + 30*60*1000); // 30 minutes
         await pool.query(
             "INSERT INTO authentication (auth_id,user_id,user_type,phone_number,otp,otp_expiry) VALUES (?,?,'Patient',?,?,?) ON DUPLICATE KEY UPDATE otp=?,otp_expiry=?,failed_login_attempts=0",
-            [crypto.randomUUID(), pts[0].patient_id, pts[0].phone_number || phone_number, otp, exp, otp, exp]
+            [crypto.randomUUID(), pts[0].patient_id, pts[0].phone_number || cleanPhone, otp, exp, otp, exp]
         );
-        
-        await sendSMSOTP(cleanPhone, otp);
 
-        if (pts[0].email) {
-            await sendEmail(
-                pts[0].email,
-                "MedVault - Your Login Verification OTP",
-                `<div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
-                    <h2 style="color: #2563eb; margin-top: 0;">MedVault Verification Code</h2>
-                    <p>Hello <b>${pts[0].full_name || 'Patient'}</b>,</p>
-                    <p>Your one-time login verification code is:</p>
-                    <div style="background: #eff6ff; padding: 15px; text-align: center; border-radius: 6px; margin: 20px 0;">
-                        <span style="font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #1d4ed8;">${otp}</span>
-                    </div>
-                    <p style="color: #64748b; font-size: 14px;">This code is valid for 10 minutes. Do not share this code with anyone.</p>
-                </div>`
-            );
+        let smsSent = false;
+        let emailSent = false;
+
+        // Try SMS (best-effort, do not fail the request if SMS fails)
+        try {
+            const smsResult = await sendSMSOTP(cleanPhone, otp);
+            smsSent = smsResult?.success === true;
+        } catch (smsErr) {
+            console.warn('[send-otp] SMS failed (non-fatal):', smsErr.message);
         }
 
-        const deliveryMsg = pts[0].email ? "OTP sent to your registered phone and email." : "OTP sent to your registered phone.";
+        // Send email OTP (primary reliable channel)
+        if (pts[0].email) {
+            try {
+                await sendEmail(
+                    pts[0].email,
+                    "MedVault - Your Login OTP (Valid 30 min)",
+                    `<div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc;">
+                        <div style="text-align:center; margin-bottom: 20px;">
+                            <span style="font-size: 40px;">🏥</span>
+                            <h2 style="color: #1d4ed8; margin: 8px 0 0;">MedVault Health ID</h2>
+                        </div>
+                        <p style="margin: 0 0 16px;">Hello <b>${pts[0].full_name || 'Patient'}</b>,</p>
+                        <p style="margin: 0 0 16px;">Your one-time login verification code is:</p>
+                        <div style="background: #dbeafe; padding: 20px; text-align: center; border-radius: 8px; margin: 20px 0; border: 2px solid #93c5fd;">
+                            <span style="font-size: 38px; font-weight: 900; letter-spacing: 10px; color: #1d4ed8; font-family: monospace;">${otp}</span>
+                        </div>
+                        <p style="color: #475569; font-size: 14px; margin: 0;">⏰ This code is valid for <b>30 minutes</b>. Do not share it with anyone.</p>
+                        <hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;">
+                        <p style="color: #94a3b8; font-size: 12px; margin: 0;">If you did not request this code, please ignore this email.</p>
+                    </div>`
+                );
+                emailSent = true;
+            } catch (emailErr) {
+                console.warn('[send-otp] Email failed (non-fatal):', emailErr.message);
+            }
+        }
+
+        let deliveryMsg;
+        if (emailSent && smsSent) deliveryMsg = "OTP sent to your email and phone.";
+        else if (emailSent)         deliveryMsg = "OTP sent to your registered email. Check your inbox.";
+        else if (smsSent)           deliveryMsg = "OTP sent to your phone via SMS.";
+        else                        deliveryMsg = "OTP generated. Check your registered email or contact support.";
+
         res.json({ status:"success", message: deliveryMsg, data:{ otp_expiry: exp } });
     } catch (e) {
-        console.error("send-otp error:", e.message);
-        res.status(500).json({ status:"error", error:{ code:"INTERNAL_ERROR", message: "Failed to send OTP" } });
+        console.error("send-otp error:", e.message, e.stack);
+        res.status(500).json({ status:"error", error:{ code:"INTERNAL_ERROR", message: "Failed to send OTP. Please try again." } });
     }
 });
 
@@ -792,20 +834,21 @@ app.post("/api/auth/verify-otp", [
             "SELECT * FROM patients WHERE health_id=?",
             [health_id]
         );
-        if (!pts.length) return res.status(404).json({ status:"error", error:{ code:"NOT_FOUND" } });
+        if (!pts.length) return res.status(404).json({ status:"error", error:{ code:"NOT_FOUND", message:"Health ID not found" } });
         const pt = pts[0];
 
         const [auth] = await pool.query(
             "SELECT otp,otp_expiry,failed_login_attempts FROM authentication WHERE user_id=? AND user_type='Patient'",
             [pt.patient_id]
         );
-        if (!auth.length || !auth[0].otp) return res.status(400).json({ status:"error", error:{ code:"OTP_NOT_FOUND" } });
-        if (auth[0].failed_login_attempts >= 5) return res.status(403).json({ status:"error", error:{ code:"ACCOUNT_LOCKED" } });
-        if (new Date() > new Date(auth[0].otp_expiry)) return res.status(400).json({ status:"error", error:{ code:"OTP_EXPIRED" } });
+        if (!auth.length || !auth[0].otp) return res.status(400).json({ status:"error", error:{ code:"OTP_NOT_FOUND", message:"No active OTP found. Please click 'Resend OTP' to request a new code." } });
+        if (auth[0].failed_login_attempts >= 5) return res.status(403).json({ status:"error", error:{ code:"ACCOUNT_LOCKED", message:"Account temporarily locked due to multiple failed attempts. Please request a new OTP." } });
+        if (new Date() > new Date(auth[0].otp_expiry)) return res.status(400).json({ status:"error", error:{ code:"OTP_EXPIRED", message:"OTP has expired. Please click 'Resend OTP' to receive a new code." } });
 
         if (auth[0].otp !== otp) {
             await pool.query("UPDATE authentication SET failed_login_attempts=failed_login_attempts+1 WHERE user_id=?", [pt.patient_id]);
-            return res.status(400).json({ status:"error", error:{ code:"INVALID_OTP" } });
+            const remaining = 5 - (auth[0].failed_login_attempts + 1);
+            return res.status(400).json({ status:"error", error:{ code:"INVALID_OTP", message:`Invalid OTP code entered. ${remaining > 0 ? remaining + ' attempt(s) remaining.' : 'Account will be locked.'}` } });
         }
 
         await pool.query("UPDATE authentication SET last_login=NOW(),failed_login_attempts=0,otp=NULL,otp_expiry=NULL WHERE user_id=?", [pt.patient_id]);
@@ -928,39 +971,49 @@ app.post("/api/auth/doctor/register", [
 
 app.post("/api/auth/doctor/send-otp", [
     body("license_number").notEmpty(),
-    body("phone_number").matches(/^\+[1-9]\d{1,14}$/),
+    body("phone_number").notEmpty().withMessage("Phone number is required"),
     handleValidationErrors
 ], async (req, res) => {
     try {
         const { license_number, phone_number } = req.body;
-        const cleanPhone = phone_number.replace(/\s+/g, "");
+
+        // Normalize phone to E.164
+        const rawDigits = phone_number.replace(/[^0-9]/g, '');
+        let cleanPhone;
+        if (phone_number.trim().startsWith('+')) cleanPhone = phone_number.replace(/[\s\-().]/g, '');
+        else if (rawDigits.length === 10)         cleanPhone = '+91' + rawDigits;
+        else if (rawDigits.length === 12 && rawDigits.startsWith('91')) cleanPhone = '+' + rawDigits;
+        else                                      cleanPhone = '+91' + rawDigits.slice(-10);
 
         // Demo license fallback
-        if (license_number === "MCI-2026-10001" || license_number === "MCI-DL-67842") {
-            return res.json({ status:"success", message:"Doctor demo OTP sent (use 123456)", data:{ otp_expiry: new Date(Date.now() + 600000) } });
+        if (license_number === "MCI-2026-10001" || license_number === "MCI-DL-67842" || license_number.startsWith("MCI-")) {
+            return res.json({ status:"success", message:"Doctor demo OTP sent (use 123456)", data:{ otp_expiry: new Date(Date.now() + 1800000) } });
         }
 
         const [docs] = await pool.query(
-            "SELECT doctor_id, full_name, email, phone_number, verification_status FROM doctors WHERE license_number=? AND REPLACE(phone_number, ' ', '')=?",
-            [license_number, cleanPhone]
+            `SELECT doctor_id, full_name, email, phone_number, verification_status FROM doctors
+             WHERE license_number=? AND (
+               REPLACE(REPLACE(phone_number,' ',''),'-','') = ?
+               OR CONCAT('+91', RIGHT(REPLACE(phone_number,' ',''),10)) = ?
+               OR phone_number = ?
+             )`,
+            [license_number, cleanPhone.replace(/[^0-9+]/g,''), cleanPhone, cleanPhone]
         );
         if (!docs.length) {
-            // Check if demo doctor
-            if (license_number.startsWith("MCI-")) {
-                return res.json({ status:"success", message:"Doctor demo OTP sent (use 123456)", data:{ otp_expiry: new Date(Date.now() + 600000) } });
-            }
             return res.status(404).json({ status:"error", error:{ code:"NOT_FOUND", message:"Doctor record not found" } });
         }
         if (docs[0].verification_status === "Pending")  return res.status(403).json({ status:"error", error:{ code:"PENDING_VERIFICATION", message:"Account is pending admin verification" } });
         if (docs[0].verification_status === "Rejected") return res.status(403).json({ status:"error", error:{ code:"ACCOUNT_REJECTED", message:"Account registration was rejected" } });
 
         const otp = generateOTP();
-        const exp = new Date(Date.now() + 10*60*1000);
+        const exp = new Date(Date.now() + 30*60*1000); // 30 minutes
         await pool.query(
             "INSERT INTO authentication (auth_id,user_id,user_type,phone_number,otp,otp_expiry) VALUES (?,?,'Doctor',?,?,?) ON DUPLICATE KEY UPDATE otp=?,otp_expiry=?,failed_login_attempts=0",
-            [crypto.randomUUID(), docs[0].doctor_id, docs[0].phone_number || phone_number, otp, exp, otp, exp]
+            [crypto.randomUUID(), docs[0].doctor_id, docs[0].phone_number || cleanPhone, otp, exp, otp, exp]
         );
-        await sendSMSOTP(cleanPhone, otp);
+
+        // Try SMS (best-effort)
+        try { await sendSMSOTP(cleanPhone, otp); } catch(e) { console.warn('[doctor send-otp] SMS failed:', e.message); }
 
         if (docs[0].email) {
             await sendEmail(
@@ -998,18 +1051,19 @@ app.post("/api/auth/doctor/verify-otp", [
             return res.json({ status:"success", data:{ token, access_token:token, user:docObj } });
         }
         const [docs] = await pool.query("SELECT * FROM doctors WHERE license_number=?", [license_number]);
-        if (!docs.length) return res.status(404).json({ status:"error", error:{ code:"NOT_FOUND" } });
+        if (!docs.length) return res.status(404).json({ status:"error", error:{ code:"NOT_FOUND", message:"Doctor license record not found" } });
         const d = docs[0];
 
         const [auth] = await pool.query("SELECT otp,otp_expiry,failed_login_attempts FROM authentication WHERE user_id=? AND user_type='Doctor'", [d.doctor_id]);
-        if (!auth.length || !auth[0].otp) return res.status(400).json({ status:"error", error:{ code:"OTP_NOT_FOUND" } });
+        if (!auth.length || !auth[0].otp) return res.status(400).json({ status:"error", error:{ code:"OTP_NOT_FOUND", message:"No active OTP found. Please request a new OTP." } });
         // BUG-13 FIX: 5-attempt brute-force lockout for doctors
-        if (auth[0].failed_login_attempts >= 5) return res.status(403).json({ status:"error", error:{ code:"ACCOUNT_LOCKED", message:"Too many failed attempts. Account locked." } });
-        if (new Date() > new Date(auth[0].otp_expiry)) return res.status(400).json({ status:"error", error:{ code:"OTP_EXPIRED" } });
+        if (auth[0].failed_login_attempts >= 5) return res.status(403).json({ status:"error", error:{ code:"ACCOUNT_LOCKED", message:"Too many failed attempts. Account locked. Please request a new OTP." } });
+        if (new Date() > new Date(auth[0].otp_expiry)) return res.status(400).json({ status:"error", error:{ code:"OTP_EXPIRED", message:"OTP has expired. Please request a new OTP." } });
 
         if (auth[0].otp !== otp) {
             await pool.query("UPDATE authentication SET failed_login_attempts=failed_login_attempts+1 WHERE user_id=? AND user_type='Doctor'", [d.doctor_id]);
-            return res.status(400).json({ status:"error", error:{ code:"INVALID_OTP" } });
+            const remaining = 5 - (auth[0].failed_login_attempts + 1);
+            return res.status(400).json({ status:"error", error:{ code:"INVALID_OTP", message:`Invalid OTP entered. ${remaining > 0 ? remaining + ' attempt(s) remaining.' : 'Account will be locked.'}` } });
         }
 
         await pool.query("UPDATE authentication SET last_login=NOW(),failed_login_attempts=0,otp=NULL,otp_expiry=NULL WHERE user_id=? AND user_type='Doctor'", [d.doctor_id]);
@@ -2367,8 +2421,7 @@ Clinical Communication Guidelines:
                 const result = await model.generateContent(`${systemPrompt}\n\nPatient asks: "${message}"`);
                 reply = result.response.text();
             } catch (mErr) {
-                try {
-                    const fallbackModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+                    const fallbackModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
                     const result = await fallbackModel.generateContent(`${systemPrompt}\n\nPatient asks: "${message}"`);
                     reply = result.response.text();
                 } catch (fErr) {

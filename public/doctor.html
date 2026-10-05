@@ -453,12 +453,24 @@
 <div id="toastContainer"></div>
 
 <script>
-const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:3000' : window.location.origin;
+const API_BASE = (window.location.hostname.includes('web.app') || window.location.hostname.includes('firebaseapp.com'))
+    ? 'https://medvault-backend-api.onrender.com'
+    : (window.location.hostname === 'localhost' ? 'http://localhost:3000' : window.location.origin);
 let doctorToken = null;
 let doctorProfile = null;
 let currentPatient = null;
 const sessionPatients = [];
 const sessionPrescriptions = [];
+
+function normalizeDoctorPhone(raw) {
+    if (!raw) return raw;
+    const stripped = raw.replace(/[\s\-().]/g, '');
+    const digits = stripped.replace(/[^0-9]/g, '');
+    if (stripped.startsWith('+')) return stripped;
+    if (digits.length === 10) return '+91' + digits;
+    if (digits.length === 12 && digits.startsWith('91')) return '+' + digits;
+    return '+91' + digits.slice(-10);
+}
 
 window.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.otp-input').forEach((inp, i, all) => {
@@ -471,7 +483,8 @@ window.addEventListener('DOMContentLoaded', () => {
 
 async function sendDoctorOTP() {
     const license = document.getElementById('licenseInput').value.trim();
-    const phone = document.getElementById('phoneInput').value.trim();
+    const rawPhone = document.getElementById('phoneInput').value.trim();
+    const phone = normalizeDoctorPhone(rawPhone);
     if (!license || !phone) { toast('Please fill in License Number and Phone', 'error'); return; }
     const btn = document.getElementById('sendOtpBtn');
     btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span> Sending...';
@@ -482,7 +495,7 @@ async function sendDoctorOTP() {
         });
         const d = await safeJson(r);
         if (d && (d.status === 'success' || r.ok)) {
-            showOtpStep(); toast('OTP sent! Demo: use 123456', 'success');
+            showOtpStep(); toast(d.message || 'OTP sent! (Demo: use 123456)', 'success');
         } else {
             showOtpStep(); toast('Demo mode — OTP: 123456', 'info');
         }

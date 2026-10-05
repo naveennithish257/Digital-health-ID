@@ -163,25 +163,46 @@ function switchAuthTab(tab) {
     }
 }
 
+/**
+ * Normalize a phone number to E.164 format (+91XXXXXXXXXX for India).
+ * Accepts: 10 digits, 91+10 digits, already has '+' prefix.
+ */
+function normalizePhone(raw) {
+    if (!raw) return raw;
+    const stripped = raw.replace(/[\s\-().]/g, '');
+    const digits = stripped.replace(/[^0-9]/g, '');
+    if (stripped.startsWith('+')) return stripped; // already E.164
+    if (digits.length === 10) return '+91' + digits;
+    if (digits.length === 12 && digits.startsWith('91')) return '+' + digits;
+    if (digits.length === 11 && digits.startsWith('0')) return '+91' + digits.slice(1);
+    return '+91' + digits.slice(-10); // best-effort
+}
+
 async function handleLogin(e) {
     e.preventDefault();
     
     const healthId = document.getElementById('loginHealthId').value.trim();
-    const phone = document.getElementById('loginPhone').value.trim();
+    const rawPhone = document.getElementById('loginPhone').value.trim();
+    const phone = normalizePhone(rawPhone);
 
     const btn = e.target.querySelector('button[type="submit"]');
     try {
         showButtonLoader(btn);
         
-        await API.auth.sendOTP(healthId, phone);
+        const result = await API.auth.sendOTP(healthId, phone);
         AppState.tempAuthData = { healthId, phone };
         
         elements.loginForm.classList.add('hidden');
         elements.otpForm.classList.remove('hidden');
-        
-        showToast('OTP sent! (Demo: use 123456)', 'success');
+
+        // Show contextual message based on whether this is a demo account
+        if (healthId === 'HID-2026-99999' || healthId.startsWith('HID-2026-99')) {
+            showToast('⚡ Demo mode — OTP is: 123456', 'success');
+        } else {
+            showToast('✉️ OTP sent! Check your registered email inbox.', 'success');
+        }
     } catch (error) {
-        showToast(error.message || 'Failed to send OTP', 'error');
+        showToast(error.message || 'Failed to send OTP. Check your Health ID and phone number.', 'error');
     } finally {
         hideButtonLoader(btn);
     }
@@ -234,13 +255,13 @@ async function handleRegister(e) {
         date_of_birth: document.getElementById('regDOB').value,
         gender: document.getElementById('regGender').value,
         blood_group: document.getElementById('regBloodGroup').value,
-        phone_number: document.getElementById('regPhone').value,
+        phone_number: normalizePhone(document.getElementById('regPhone').value),
         email: document.getElementById('regEmail').value,
         address: document.getElementById('regAddress').value,
         allergies: document.getElementById('regAllergies').value,
         chronic_conditions: document.getElementById('regConditions').value,
         emergency_contact_name: document.getElementById('regEmergencyName').value,
-        emergency_contact_phone: document.getElementById('regEmergencyPhone').value
+        emergency_contact_phone: normalizePhone(document.getElementById('regEmergencyPhone').value)
     };
 
     const btn = e.target.querySelector('button[type="submit"]');
@@ -266,8 +287,27 @@ function proceedToLogin() {
     switchAuthTab('login');
 }
 
-function resendOTP() {
-    showToast('OTP resent!', 'info');
+async function resendOTP() {
+    if (!AppState.tempAuthData || !AppState.tempAuthData.healthId) {
+        showToast('Please enter your Health ID and Phone first', 'error');
+        return;
+    }
+    try {
+        const { healthId, phone } = AppState.tempAuthData;
+        const res = await API.auth.sendOTP(healthId, phone);
+        // Clear previous OTP inputs
+        document.querySelectorAll('.otp-input').forEach(input => { input.value = ''; });
+        const firstOtpInput = document.querySelector('.otp-input');
+        if (firstOtpInput) firstOtpInput.focus();
+
+        if (healthId === 'HID-2026-99999' || healthId.startsWith('HID-2026-99')) {
+            showToast('⚡ Demo mode — OTP is: 123456', 'success');
+        } else {
+            showToast(res.message || '✉️ New OTP sent to your registered email and phone.', 'success');
+        }
+    } catch (err) {
+        showToast(err.message || 'Failed to resend OTP. Please try again.', 'error');
+    }
 }
 
 function logout() {
@@ -2105,16 +2145,6 @@ function simulateDelay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function resendOTP() {
-    if (!AppState.tempAuthData) {
-        showToast('Please start login process first', 'error');
-        return;
-    }
-    
-    API.auth.sendOTP(AppState.tempAuthData.healthId, AppState.tempAuthData.phone)
-        .then(() => showToast('OTP resent! (Demo: use 123456)', 'success'))
-        .catch(() => showToast('Failed to resend OTP', 'error'));
-}
 
 // ============================================
 // MODAL FUNCTIONS

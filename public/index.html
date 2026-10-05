@@ -42,7 +42,7 @@
                     </div>
                     <div class="form-group">
                         <label class="form-label">Phone Number</label>
-                        <input type="tel" class="form-input" id="loginPhone" placeholder="+91 98765 43210" required>
+                        <input type="tel" class="form-input" id="loginPhone" placeholder="8248728767 or +91 98765 43210" required>
                     </div>
                     <button type="submit" class="btn btn-primary btn-block">Send OTP</button>
                     <div style="margin-top: 14px; text-align: center;">
@@ -58,9 +58,9 @@
 
                 <!-- OTP Verification -->
                 <form id="otpForm" class="auth-form hidden">
-                    <div class="alert alert-info">
-                        <span>📱</span>
-                        <span>OTP sent to your phone</span>
+                    <div class="alert alert-info" id="otpDeliveryAlert">
+                        <span>✉️</span>
+                        <span id="otpDeliveryMsg">OTP sent to your registered email and phone</span>
                     </div>
                     <div class="form-group">
                         <label class="form-label">Enter OTP</label>
