@@ -31,5 +31,16 @@ jobs:
         run: npm run lint || true
 
       - name: Run Test Suite
+        env:
+          NODE_ENV: test
+          DB_HOST: ${{ secrets.DB_HOST || 'gateway01.ap-southeast-1.prod.aws.tidbcloud.com' }}
+          DB_PORT: ${{ secrets.DB_PORT || '4000' }}
+          DB_USER: ${{ secrets.DB_USER || '2HiVsqYJBJTzGBm.root' }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD || 'ZcuA42MgiOr3tK62' }}
+          DB_NAME: ${{ secrets.DB_NAME || 'health_id_system' }}
+          DB_SSL: 'true'
+          JWT_SECRET: medvault-super-secure-jwt-secret-key-2026
+          JWT_REFRESH_SECRET: medvault-refresh-token-secret-key-2026
+          ADMIN_PASSWORD: Admin@MedVault2026!
         run: npm test
 

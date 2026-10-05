@@ -2421,6 +2421,7 @@ Clinical Communication Guidelines:
                 const result = await model.generateContent(`${systemPrompt}\n\nPatient asks: "${message}"`);
                 reply = result.response.text();
             } catch (mErr) {
+                try {
                     const fallbackModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
                     const result = await fallbackModel.generateContent(`${systemPrompt}\n\nPatient asks: "${message}"`);
                     reply = result.response.text();
