@@ -495,11 +495,11 @@ async function sendDoctorOTP() {
         });
         const d = await safeJson(r);
         if (d && (d.status === 'success' || r.ok)) {
-            showOtpStep(); toast(d.message || 'OTP sent! (Demo: use 123456)', 'success');
+            showOtpStep(); toast(d.message || 'OTP sent! Please check your phone/email.', 'success');
         } else {
-            showOtpStep(); toast('Demo mode — OTP: 123456', 'info');
+            toast(d && d.error ? d.error.message : 'Failed to send OTP. Please check credentials.', 'error');
         }
-    } catch (e) { showOtpStep(); toast('Demo mode — OTP: 123456', 'info'); }
+    } catch (e) { toast('Error sending OTP. Please try again.', 'error'); }
     btn.disabled = false; btn.innerHTML = '🔐 Send OTP';
 }
 
@@ -510,7 +510,7 @@ function showOtpStep() {
 }
 
 async function verifyDoctorOTP() {
-    const license = document.getElementById('licenseInput').value.trim() || 'MCI-DL-67842';
+    const license = document.getElementById('licenseInput').value.trim();
     const otp = Array.from(document.querySelectorAll('.otp-input')).map(i => i.value).join('');
     if (otp.length < 6) { toast('Enter all 6 OTP digits', 'error'); return; }
     const btn = document.getElementById('verifyOtpBtn');
@@ -528,12 +528,7 @@ async function verifyDoctorOTP() {
             initDoctorApp();
         } else { toast(d && d.error ? d.error.message : 'Invalid OTP', 'error'); }
     } catch (e) {
-        if (otp === '123456') {
-            doctorToken = 'demo-doctor-token';
-            localStorage.setItem('doctorToken', doctorToken);
-            doctorProfile = { doctor_id:'doc-001', full_name:'Dr. Aakash Roy', specialization:'Cardiology', license_number:'MCI-DL-67842', email:'aakash.roy@medvault.health', qualification:'MBBS, MD, DM (Cardiology)', experience_years: 12, verification_status:'Verified' };
-            initDoctorApp();
-        } else { toast('Invalid OTP. Try 123456 for demo.', 'error'); }
+        toast('Verification failed. Please try again.', 'error');
     }
     btn.disabled = false; btn.innerHTML = '✅ Verify & Login';
 }

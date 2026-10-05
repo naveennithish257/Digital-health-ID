@@ -50,6 +50,14 @@ services:
       - key: EMAIL_FROM
         value: "MedVault <onboarding@resend.dev>"
 
+      # ── Twilio SMS (Global / Direct India SMS) ─────────────────
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+
       # ── MSG91 SMS ─────────────────────────────────────────────
       - key: MSG91_AUTH_KEY
         value: REPLACE_WITH_MSG91_AUTH_KEY

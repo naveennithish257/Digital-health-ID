@@ -142,22 +142,71 @@ async function sendEmail(to, subject, html) {
     }
 }
 
-// ── MSG91 SMS Service (OTP + Transactional Alerts) ───────────
+// ── SMS Service: Twilio (Global/India Direct) + MSG91 Fallback ───────────
 /**
- * Send an OTP via MSG91 v5 OTP API.
+ * Send an SMS via Twilio REST API (Bypasses Indian TRAI DLT blocks).
+ */
+async function sendTwilioSMS(toPhone, messageBody) {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const fromNumber = process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_MESSAGING_SERVICE_SID;
+
+    if (!accountSid || !authToken || !fromNumber) {
+        return { success: false, reason: "twilio_not_configured" };
+    }
+
+    // Ensure E.164 format (+91XXXXXXXXXX)
+    const rawDigits = toPhone.replace(/[^0-9]/g, "");
+    const formattedPhone = toPhone.trim().startsWith("+") ? toPhone.trim() : (rawDigits.startsWith("91") ? `+${rawDigits}` : `+91${rawDigits.slice(-10)}`);
+
+    const params = new URLSearchParams();
+    params.append("To", formattedPhone);
+    params.append("From", fromNumber);
+    params.append("Body", messageBody);
+
+    const authHeader = "Basic " + Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+    const response = await axios.post(
+        `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+        params.toString(),
+        {
+            headers: {
+                "Authorization": authHeader,
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            timeout: 8000
+        }
+    );
+    console.log(`[Twilio SMS] ✅ Sent to ${formattedPhone}. SID:`, response.data?.sid);
+    return { success: true, mode: "twilio", sid: response.data?.sid };
+}
+
+/**
+ * Send an OTP via Twilio or MSG91 v5 OTP API.
  * Falls back to console logging in development.
  */
 async function sendSMSOTP(phoneNumber, otp) {
     if (!phoneNumber) return { success: false, mode: "skip", reason: "no phone" };
+
+    // 1. Try Twilio first (Direct carrier delivery without DLT route drops)
+    if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+        try {
+            const twilioRes = await sendTwilioSMS(phoneNumber, `Your MedVault verification code is: ${otp}. Valid for 30 minutes. Do not share this code.`);
+            if (twilioRes.success) return twilioRes;
+        } catch (twilioErr) {
+            console.warn("[Twilio SMS] ⚠️ Error:", twilioErr.response?.data?.message || twilioErr.message);
+        }
+    }
+
     const rawDigits = phoneNumber.replace(/[^0-9]/g, "");
     const phone = rawDigits.startsWith("91") && rawDigits.length > 10 ? rawDigits : `91${rawDigits.slice(-10)}`;
     if (!process.env.MSG91_AUTH_KEY || !process.env.MSG91_TEMPLATE_ID) {
         console.log(`[SMS DEV] 📱 OTP for ${phoneNumber}: ${otp}`);
         return { success: true, mode: "dev", otp };
     }
-    // 1. Try MSG91 Dedicated OTP API first (Transactional 24x7 Route)
+
+    // 2. Fallback to MSG91 Dedicated OTP API
     try {
-        const otpUrl = `https://control.msg91.com/api/v5/otp?template_id=${process.env.MSG91_TEMPLATE_ID}&mobile=${phone}&otp=${otp}&otp_expiry=15`;
+        const otpUrl = `https://control.msg91.com/api/v5/otp?template_id=${process.env.MSG91_TEMPLATE_ID}&mobile=${phone}&otp=${otp}&otp_expiry=30`;
         const response = await axios.post(
             otpUrl,
             {},
@@ -174,7 +223,7 @@ async function sendSMSOTP(phoneNumber, otp) {
         return { success: true, mode: "msg91_otp", response: response.data };
     } catch (otpErr) {
         console.warn(`[MSG91 OTP API] ⚠️ Retrying via Flow API for ${phoneNumber}:`, otpErr.response?.data?.message || otpErr.message);
-        // 2. Fallback to MSG91 Flow API
+        // 3. Fallback to MSG91 Flow API
         try {
             const flowResponse = await axios.post(
                 "https://api.msg91.com/api/v5/flow/",
@@ -217,6 +266,17 @@ async function sendSMSOTP(phoneNumber, otp) {
  */
 async function sendSMSAlert(phoneNumber, message) {
     if (!phoneNumber) return { success: false, mode: "skip", reason: "no phone" };
+
+    // Try Twilio first
+    if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+        try {
+            const twilioRes = await sendTwilioSMS(phoneNumber, message);
+            if (twilioRes.success) return twilioRes;
+        } catch (err) {
+            console.warn("[Twilio SMS Alert] ⚠️", err.response?.data?.message || err.message);
+        }
+    }
+
     const rawPhone = phoneNumber.replace(/^\+/, "");
     const phone = rawPhone.startsWith("91") ? rawPhone : `91${rawPhone}`;
     if (!process.env.MSG91_AUTH_KEY || !process.env.MSG91_FLOW_ID) {
@@ -2422,7 +2482,7 @@ Clinical Communication Guidelines:
                 reply = result.response.text();
             } catch (mErr) {
                 try {
-                    const fallbackModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+                    const fallbackModel = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
                     const result = await fallbackModel.generateContent(`${systemPrompt}\n\nPatient asks: "${message}"`);
                     reply = result.response.text();
                 } catch (fErr) {

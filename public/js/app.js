@@ -195,12 +195,7 @@ async function handleLogin(e) {
         elements.loginForm.classList.add('hidden');
         elements.otpForm.classList.remove('hidden');
 
-        // Show contextual message based on whether this is a demo account
-        if (healthId === 'HID-2026-99999' || healthId.startsWith('HID-2026-99')) {
-            showToast('⚡ Demo mode — OTP is: 123456', 'success');
-        } else {
-            showToast('✉️ OTP sent! Check your registered email inbox.', 'success');
-        }
+        showToast(result?.message || '✉️ OTP sent! Check your registered phone and email.', 'success');
     } catch (error) {
         showToast(error.message || 'Failed to send OTP. Check your Health ID and phone number.', 'error');
     } finally {
@@ -300,11 +295,7 @@ async function resendOTP() {
         const firstOtpInput = document.querySelector('.otp-input');
         if (firstOtpInput) firstOtpInput.focus();
 
-        if (healthId === 'HID-2026-99999' || healthId.startsWith('HID-2026-99')) {
-            showToast('⚡ Demo mode — OTP is: 123456', 'success');
-        } else {
-            showToast(res.message || '✉️ New OTP sent to your registered email and phone.', 'success');
-        }
+        showToast(res.message || '✉️ New OTP sent to your registered phone and email.', 'success');
     } catch (err) {
         showToast(err.message || 'Failed to resend OTP. Please try again.', 'error');
     }
