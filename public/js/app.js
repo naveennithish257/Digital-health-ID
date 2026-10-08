@@ -253,13 +253,22 @@ async function handleLogin(e) {
         elements.otpForm.classList.remove('hidden');
 
         const alertMsg = document.getElementById('otpDeliveryMsg');
-        if (alertMsg) {
-            alertMsg.textContent = result?.message || `✉️ Verification OTP sent to ${result?.data?.email || email || 'your email'}.`;
-        }
-
+        const targetEmail = result?.data?.email || email || 'your email';
         if (result?.data?.otp) {
-            showToast(`🔑 Your OTP is: ${result.data.otp} (also sent to email)`, 'success');
+            if (alertMsg) {
+                alertMsg.innerHTML = `✉️ OTP sent to <b>${targetEmail}</b>.<br><span style="display:inline-block;margin-top:6px;font-size:1.15rem;font-weight:700;color:#10b981;letter-spacing:3px;">🔑 OTP: ${result.data.otp}</span>`;
+            }
+            // Auto-fill OTP inputs for immediate frictionless login
+            const otpInputs = document.querySelectorAll('.otp-input');
+            const digits = String(result.data.otp).split('');
+            otpInputs.forEach((input, idx) => {
+                if (digits[idx]) input.value = digits[idx];
+            });
+            showToast(`🔑 Your OTP is: ${result.data.otp} (auto-filled)`, 'success');
         } else {
+            if (alertMsg) {
+                alertMsg.textContent = result?.message || `✉️ Verification OTP sent to ${targetEmail}.`;
+            }
             showToast(result?.message || '✉️ Verification OTP sent to your email!', 'success');
         }
     } catch (error) {
@@ -268,6 +277,36 @@ async function handleLogin(e) {
         hideButtonLoader(btn);
     }
 }
+
+window.resendOTP = async function() {
+    const data = AppState.tempAuthData || {};
+    try {
+        showToast('✉️ Resending OTP...', 'info');
+        const result = await API.auth.sendOTP(data.healthId, data.phone, data.email);
+        const alertMsg = document.getElementById('otpDeliveryMsg');
+        const targetEmail = result?.data?.email || data.email || 'your email';
+        if (result?.data?.otp) {
+            if (alertMsg) {
+                alertMsg.innerHTML = `✉️ New OTP sent to <b>${targetEmail}</b>.<br><span style="display:inline-block;margin-top:6px;font-size:1.15rem;font-weight:700;color:#10b981;letter-spacing:3px;">🔑 OTP: ${result.data.otp}</span>`;
+            }
+            const otpInputs = document.querySelectorAll('.otp-input');
+            const digits = String(result.data.otp).split('');
+            otpInputs.forEach((input, idx) => {
+                if (digits[idx]) input.value = digits[idx];
+            });
+            showToast(`🔑 New OTP is: ${result.data.otp} (auto-filled)`, 'success');
+        } else {
+            showToast(result?.message || '✉️ New OTP sent to your email!', 'success');
+        }
+    } catch (err) {
+        showToast(err.message || 'Failed to resend OTP', 'error');
+    }
+};
+
+window.backToLogin = function() {
+    elements.otpForm.classList.add('hidden');
+    elements.loginForm.classList.remove('hidden');
+};
 
 async function handleOTPVerify(e) {
     e.preventDefault();

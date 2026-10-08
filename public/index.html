@@ -73,7 +73,10 @@
                         </div>
                     </div>
                     <button type="submit" class="btn btn-primary btn-block">Verify OTP & Login</button>
-                    <button type="button" class="btn btn-ghost btn-block mt-md" onclick="resendOTP()">✉️ Resend OTP to Mail ID</button>
+                    <div style="display: flex; gap: 8px; margin-top: 12px;">
+                        <button type="button" class="btn btn-ghost" style="flex: 1;" onclick="resendOTP()">✉️ Resend OTP</button>
+                        <button type="button" class="btn btn-ghost" style="flex: 1;" onclick="backToLogin()">← Change ID / Email</button>
+                    </div>
                 </form>
 
                 <!-- Registration Form -->

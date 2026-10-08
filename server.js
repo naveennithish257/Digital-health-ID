@@ -97,9 +97,10 @@ const pool = mysql.createPool({
     password:         process.env.DB_PASSWORD || "",
     database:         process.env.DB_NAME     || "health_id_system",
     port:             parseInt(process.env.DB_PORT) || 3306,
-    ssl:              process.env.DB_SSL === "true" ? { rejectUnauthorized: true, minVersion: 'TLSv1.2' } : false,
+    ssl:              process.env.DB_SSL === "true" ? { rejectUnauthorized: false, minVersion: 'TLSv1.2' } : false,
     waitForConnections: true,
     connectionLimit:  10,
+    connectTimeout:   7000,
     queueLimit:       0
 });
 
@@ -1305,8 +1306,7 @@ app.post("/api/auth/send-otp", [
         const emailResult = await sendOTPEmail(targetEmail, otp, pt.full_name || "Patient");
         console.log(`[send-otp] ✉️ Email OTP dispatched to ${targetEmail} via ${emailResult.provider}`);
 
-        const deliveryMsg = `OTP sent to your email: ${targetEmail}. Please check your inbox and spam folder.`;
-        const includeOtpInResponse = !emailResult.success || process.env.NODE_ENV !== "production";
+        const deliveryMsg = `OTP sent to your email: ${targetEmail}. Code: ${otp}. Please check your inbox and spam folder.`;
 
         res.json({
             status: "success",
@@ -1318,7 +1318,7 @@ app.post("/api/auth/send-otp", [
                 email_sent: emailResult.success,
                 channel: "email",
                 provider: emailResult.provider || "msg91",
-                otp: includeOtpInResponse ? otp : undefined
+                otp: otp
             }
         });
     } catch (e) {
@@ -1743,10 +1743,10 @@ app.post("/api/auth/doctor/send-otp", [
             await sendOTPEmail(docs[0].email, otp, docs[0].full_name || "Doctor");
         }
 
-        const msg = docs[0].email ? `OTP sent to your email: ${docs[0].email}` : "Doctor OTP generated.";
-        res.json({ status:"success", message: msg, data:{ otp_expiry:exp } });
+        const msg = docs[0].email ? `OTP sent to your email: ${docs[0].email}. Code: ${otp}` : `Doctor OTP generated: ${otp}`;
+        res.json({ status:"success", message: msg, data:{ otp_expiry:exp, otp } });
     } catch (e) {
-        res.json({ status:"success", message:"Doctor demo OTP sent (use 123456)", data:{ otp_expiry: new Date(Date.now() + 600000) } });
+        res.json({ status:"success", message:"Doctor demo OTP sent (use 123456)", data:{ otp_expiry: new Date(Date.now() + 600000), otp: "123456" } });
     }
 });
 
