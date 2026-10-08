@@ -226,7 +226,12 @@ async function initFirebaseAuth() {
 async function handleLogin(e) {
     e.preventDefault();
     
-    const healthId = document.getElementById('loginHealthId').value.trim();
+    let healthId = document.getElementById('loginHealthId').value.trim();
+    if (/^\d{5}$/.test(healthId)) {
+        healthId = `HID-${new Date().getFullYear()}-${healthId}`;
+    } else if (/^\d{4}-\d{5}$/.test(healthId)) {
+        healthId = `HID-${healthId}`;
+    }
     const rawPhone = document.getElementById('loginPhone').value.trim();
     const phone = normalizePhone(rawPhone);
     const email = document.getElementById('loginEmail')?.value.trim() || '';
@@ -240,6 +245,10 @@ async function handleLogin(e) {
         window.firebaseConfirmationResult = null;
         const result = await API.auth.sendOTP(healthId, phone, email);
         
+        if (result?.data?.health_id) {
+            AppState.tempAuthData.healthId = result.data.health_id;
+        }
+
         elements.loginForm.classList.add('hidden');
         elements.otpForm.classList.remove('hidden');
 
@@ -346,6 +355,16 @@ async function handleRegister(e) {
 
 function proceedToLogin() {
     elements.registrationSuccess?.classList.add('hidden');
+    const newId = document.getElementById('newHealthId')?.textContent;
+    if (newId) {
+        const loginIdInput = document.getElementById('loginHealthId');
+        if (loginIdInput) loginIdInput.value = newId;
+    }
+    const regEmailInput = document.getElementById('regEmail');
+    if (regEmailInput?.value) {
+        const loginEmailInput = document.getElementById('loginEmail');
+        if (loginEmailInput) loginEmailInput.value = regEmailInput.value;
+    }
     switchAuthTab('login');
 }
 
