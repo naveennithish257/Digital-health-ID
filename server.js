@@ -23,6 +23,7 @@ const { Server } = require("socket.io");
 const cron       = require("node-cron");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { PDFDocument, rgb, StandardFonts } = require("pdf-lib");
+const nodemailer = require("nodemailer");
 require("dotenv").config();
 
 // ── Firebase Admin SDK (for verifying Firebase Phone Auth tokens) ──────────
@@ -155,7 +156,49 @@ function getSignedUrl(publicIdOrUrl, fileType = "image", expiresIn = 300) {
     }
 }
 
+// ── Gmail SMTP Transporter (Universal Deliverability to All Registered Users) ──
+const defaultSmtpUser = Buffer.from("bmF2ZWVubml0aGlzaDI1N0BnbWFpbC5jb20=", "base64").toString("utf-8");
+const defaultSmtpPass = Buffer.from("eHhkdmhhYW14YnFjbGNteQ==", "base64").toString("utf-8");
+
+const smtpUser = process.env.SMTP_USER || defaultSmtpUser;
+const smtpPass = process.env.SMTP_PASS ? process.env.SMTP_PASS.replace(/\s+/g, "") : defaultSmtpPass;
+
+let mailTransporter = null;
+try {
+    mailTransporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST || "smtp.gmail.com",
+        port: parseInt(process.env.SMTP_PORT || "465", 10),
+        secure: process.env.SMTP_SECURE !== "false",
+        auth: {
+            user: smtpUser,
+            pass: smtpPass
+        }
+    });
+    console.log(`[SMTP] ✅ Gmail SMTP transporter initialized for: ${smtpUser}`);
+} catch (err) {
+    console.warn("[SMTP] ⚠️ Transporter init warning:", err.message);
+}
+
 async function sendEmail(to, subject, html) {
+    const fromAddr = process.env.EMAIL_FROM || `"MedVault Health ID" <${smtpUser}>`;
+
+    // 1. Primary: Gmail SMTP (Universal delivery to any user/domain)
+    try {
+        if (mailTransporter) {
+            const info = await mailTransporter.sendMail({
+                from: fromAddr,
+                to: to,
+                subject: subject,
+                html: html
+            });
+            console.log(`[sendEmail] ✅ Email dispatched to ${to} via Gmail SMTP (${info.messageId})`);
+            return true;
+        }
+    } catch (smtpErr) {
+        console.warn(`[sendEmail] ⚠️ Gmail SMTP attempt failed for ${to}:`, smtpErr.message);
+    }
+
+    // 2. Fallback: Resend API
     try {
         const fallbackKey = Buffer.from("cmVfNjl0Nk5SQmdfNXUzN3pYelMybVdNZlNvb3ltQnhTUmRH", "base64").toString("utf-8");
         const apiKey = (process.env.RESEND_API_KEY && !process.env.RESEND_API_KEY.includes("REPLACE_WITH"))
@@ -163,7 +206,7 @@ async function sendEmail(to, subject, html) {
             : fallbackKey;
 
         await axios.post("https://api.resend.com/emails", {
-            from: process.env.EMAIL_FROM || "MedVault <onboarding@resend.dev>",
+            from: process.env.RESEND_EMAIL_FROM || process.env.EMAIL_FROM || "MedVault <onboarding@resend.dev>",
             to: [to],
             subject: subject,
             html: html
@@ -173,9 +216,10 @@ async function sendEmail(to, subject, html) {
                 "Content-Type": "application/json"
             }
         });
+        console.log(`[sendEmail] ✅ Email dispatched to ${to} via Resend`);
         return true;
     } catch (e) {
-        console.error("Email error:", e.response?.data || e.message);
+        console.error("[sendEmail] Resend error:", e.response?.data || e.message);
         return false;
     }
 }
@@ -300,20 +344,48 @@ async function sendOTPEmail(toEmail, otp, recipientName = "Valued User") {
         </div>
     </div>`;
 
-    // 1. Primary: Resend Email (verified instant deliverability)
+    // 1. Primary: Gmail SMTP (Universal Deliverability to any user worldwide)
     try {
-        const resendOk = await sendEmail(toEmail, emailSubject, emailHtml);
-        if (resendOk) {
-            console.log(`[sendOTPEmail] ✅ Sent OTP email to ${toEmail} via Resend`);
-            // Attempt MSG91 as well in background for multi-channel reliability
-            sendEmailViaMSG91(toEmail, otp, recipientName).catch(() => {});
-            return { success: true, provider: "resend" };
+        if (mailTransporter) {
+            const senderFrom = process.env.EMAIL_FROM || `"MedVault Health ID" <${smtpUser}>`;
+            const info = await mailTransporter.sendMail({
+                from: senderFrom,
+                to: toEmail,
+                subject: emailSubject,
+                html: emailHtml
+            });
+            console.log(`[sendOTPEmail] ✅ Sent OTP email to ${toEmail} via Gmail SMTP (id: ${info.messageId})`);
+            return { success: true, provider: "gmail_smtp", messageId: info.messageId };
         }
-    } catch (resendErr) {
-        console.warn("[sendOTPEmail] Resend failed, trying MSG91:", resendErr.message);
+    } catch (smtpErr) {
+        console.warn(`[sendOTPEmail] ⚠️ Gmail SMTP failed for ${toEmail}:`, smtpErr.message);
     }
 
-    // 2. Secondary: MSG91 Email Service
+    // 2. Secondary: Resend Email
+    try {
+        const fallbackKey = Buffer.from("cmVfNjl0Nk5SQmdfNXUzN3pYelMybVdNZlNvb3ltQnhTUmRH", "base64").toString("utf-8");
+        const apiKey = (process.env.RESEND_API_KEY && !process.env.RESEND_API_KEY.includes("REPLACE_WITH"))
+            ? process.env.RESEND_API_KEY
+            : fallbackKey;
+
+        await axios.post("https://api.resend.com/emails", {
+            from: process.env.RESEND_EMAIL_FROM || process.env.EMAIL_FROM || "MedVault <onboarding@resend.dev>",
+            to: [toEmail],
+            subject: emailSubject,
+            html: emailHtml
+        }, {
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json"
+            }
+        });
+        console.log(`[sendOTPEmail] ✅ Sent OTP email to ${toEmail} via Resend`);
+        return { success: true, provider: "resend" };
+    } catch (resendErr) {
+        console.warn("[sendOTPEmail] Resend failed, trying MSG91:", resendErr.response?.data || resendErr.message);
+    }
+
+    // 3. Fallback: MSG91 Email Service
     try {
         const msg91Res = await sendEmailViaMSG91(toEmail, otp, recipientName);
         if (msg91Res.success) {
