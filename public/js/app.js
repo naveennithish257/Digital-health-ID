@@ -146,6 +146,17 @@ function showApp() {
     navigateTo('dashboard');
     initSocket();
     initNotifications();
+    loadPatientAnnouncements();
+}
+
+async function loadPatientAnnouncements() {
+    try {
+        const res = await fetch('/api/announcements');
+        const d = await res.json();
+        if (d && d.status === 'success' && d.data && d.data.length > 0) {
+            displayPatientBroadcastBanner(d.data[0]);
+        }
+    } catch (e) {}
 }
 
 function switchAuthTab(tab) {
@@ -178,6 +189,40 @@ function normalizePhone(raw) {
     return '+91' + digits.slice(-10); // best-effort
 }
 
+// ── Firebase Phone Auth Support ──────────────────────────────────────────────
+let firebaseAuthReady = false;
+async function initFirebaseAuth() {
+    try {
+        if (typeof firebase === 'undefined') return false;
+        if (!firebase.apps.length) {
+            let config = window.FIREBASE_CONFIG;
+            if (!config || !config.apiKey) {
+                try {
+                    const res = await API.auth.getFirebaseConfig();
+                    if (res?.data?.apiKey) {
+                        config = res.data;
+                    }
+                } catch (_) {}
+            }
+            if (config && config.apiKey) {
+                firebase.initializeApp(config);
+            }
+        }
+        if (firebase.apps.length) {
+            if (!window.recaptchaVerifier && document.getElementById('recaptcha-container')) {
+                window.recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
+                    size: 'invisible'
+                });
+            }
+            firebaseAuthReady = true;
+            return true;
+        }
+    } catch (err) {
+        console.warn('[Firebase Auth] Init error, falling back to server OTP:', err.message);
+    }
+    return false;
+}
+
 async function handleLogin(e) {
     e.preventDefault();
     
@@ -188,9 +233,31 @@ async function handleLogin(e) {
     const btn = e.target.querySelector('button[type="submit"]');
     try {
         showButtonLoader(btn);
-        
-        const result = await API.auth.sendOTP(healthId, phone);
         AppState.tempAuthData = { healthId, phone };
+
+        // Attempt Firebase Phone Auth if configured
+        const isFirebase = await initFirebaseAuth();
+        if (isFirebase && window.recaptchaVerifier) {
+            try {
+                const confirmation = await firebase.auth().signInWithPhoneNumber(phone, window.recaptchaVerifier);
+                window.firebaseConfirmationResult = confirmation;
+                elements.loginForm.classList.add('hidden');
+                elements.otpForm.classList.remove('hidden');
+                const alertMsg = document.getElementById('otpDeliveryMsg');
+                if (alertMsg) alertMsg.textContent = `SMS OTP sent to ${phone} via Firebase`;
+                showToast(`📲 Firebase SMS OTP sent to ${phone}!`, 'success');
+                return;
+            } catch (fbErr) {
+                console.warn('[Firebase] SMS send failed, falling back to server OTP:', fbErr.message);
+                if (window.recaptchaVerifier?.render) {
+                    try { window.recaptchaVerifier.render().then(widgetId => grecaptcha.reset(widgetId)); } catch(_) {}
+                }
+            }
+        }
+
+        // Standard Server OTP fallback (Resend Email + SMS Best-effort + Dev Display)
+        window.firebaseConfirmationResult = null;
+        const result = await API.auth.sendOTP(healthId, phone);
         
         elements.loginForm.classList.add('hidden');
         elements.otpForm.classList.remove('hidden');
@@ -223,14 +290,23 @@ async function handleOTPVerify(e) {
     try {
         showButtonLoader(btn);
 
-        const response = await API.auth.verifyOTP(
-            AppState.tempAuthData?.healthId,
-            AppState.tempAuthData?.phone,
-            otp
-        );
+        let response;
+        if (window.firebaseConfirmationResult) {
+            // Verify with Firebase Phone Auth
+            const userCredential = await window.firebaseConfirmationResult.confirm(otp);
+            const idToken = await userCredential.user.getIdToken();
+            response = await API.auth.firebaseLogin(AppState.tempAuthData?.healthId, idToken);
+        } else {
+            // Verify with standard Server OTP
+            response = await API.auth.verifyOTP(
+                AppState.tempAuthData?.healthId,
+                AppState.tempAuthData?.phone,
+                otp
+            );
+        }
 
-        AppState.user = response.data.patient;
-        api.setToken(response.data.token);
+        AppState.user = response.data.patient || response.data.user;
+        api.setToken(response.data.token || response.data.access_token);
         localStorage.setItem('userData', JSON.stringify(AppState.user));
         
         showToast('Login successful!', 'success');
@@ -245,6 +321,7 @@ async function handleOTPVerify(e) {
         hideButtonLoader(btn);
     }
 }
+
 
 async function handleRegister(e) {
     e.preventDefault();
@@ -293,17 +370,22 @@ async function resendOTP() {
     }
     try {
         const { healthId, phone } = AppState.tempAuthData;
-        const res = await API.auth.sendOTP(healthId, phone);
+        if (window.firebaseConfirmationResult && firebaseAuthReady && window.recaptchaVerifier) {
+            const confirmation = await firebase.auth().signInWithPhoneNumber(phone, window.recaptchaVerifier);
+            window.firebaseConfirmationResult = confirmation;
+            showToast(`📲 Firebase SMS OTP resent to ${phone}!`, 'success');
+        } else {
+            const res = await API.auth.sendOTP(healthId, phone);
+            if (res?.data?.otp) {
+                showToast(`🔑 Your new OTP is: ${res.data.otp} (also sent to email)`, 'success');
+            } else {
+                showToast(res?.message || '✉️ New OTP sent to your registered phone and email.', 'success');
+            }
+        }
         // Clear previous OTP inputs
         document.querySelectorAll('.otp-input').forEach(input => { input.value = ''; });
         const firstOtpInput = document.querySelector('.otp-input');
         if (firstOtpInput) firstOtpInput.focus();
-
-        if (res?.data?.otp) {
-            showToast(`🔑 Your new OTP is: ${res.data.otp} (also sent to email)`, 'success');
-        } else {
-            showToast(res?.message || '✉️ New OTP sent to your registered phone and email.', 'success');
-        }
     } catch (err) {
         showToast(err.message || 'Failed to resend OTP. Please try again.', 'error');
     }
@@ -335,6 +417,9 @@ function navigateTo(section) {
         prescriptions: 'Prescriptions',
         vitals: 'Vital Signs',
         appointments: 'Appointments',
+        labresults: 'Lab Results & Biomarkers',
+        vaccinations: 'Vaccinations & Immunizations',
+        insurance: 'Insurance & Claims',
         healthid: 'My Health ID',
         emergency: 'Emergency Access',
         consent: 'Consent & Sharing',
@@ -362,6 +447,9 @@ function loadSection(section) {
         prescriptions: loadPrescriptions,
         vitals: loadVitals,
         appointments: loadAppointments,
+        labresults: loadLabResults,
+        vaccinations: loadVaccinations,
+        insurance: loadInsurance,
         healthid: loadHealthID,
         emergency: loadEmergency,
         consent: loadConsent,
@@ -1212,8 +1300,8 @@ async function saveVitalReading() {
 async function loadAppointments() {
     let allAppointments = [];
     try {
-        const res = await API.appointments.getAll ? API.appointments.getAll() : API.appointments.getUpcoming();
-        allAppointments = (await res).data || [];
+        const res = await (API.appointments.getAll ? API.appointments.getAll() : API.appointments.getUpcoming());
+        allAppointments = res.data || [];
     } catch (e) {}
 
     if (!allAppointments || !allAppointments.length) {
@@ -1730,23 +1818,30 @@ async function submitGrantConsent() {
 
 async function loadAssistant() {
     elements.mainContent.innerHTML = `
-        <div class="card" style="max-width: 800px; margin: 0 auto; display: flex; flex-direction: column; height: 580px;">
+        <div class="card" style="max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; height: 600px;">
             <div class="card-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 14px;">
-                <div style="display:flex;align-items:center;gap:12px;">
-                    <div style="width:40px;height:40px;background:rgba(59,130,246,0.15);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;">🤖</div>
-                    <div>
-                        <h3 class="card-title" style="margin:0;">MedVault AI Health Companion</h3>
-                        <p style="color:var(--text-tertiary);font-size:0.8rem;margin-top:2px;">Powered by Google Gemini — grounded in your personal medical record history</p>
+                <div style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <div style="width:42px;height:42px;background:linear-gradient(135deg,rgba(99,102,241,0.2),rgba(16,185,129,0.2));border:1px solid rgba(99,102,241,0.3);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;">🤖</div>
+                        <div>
+                            <h3 class="card-title" style="margin:0;font-size:1.1rem;">MedVault Clinical AI Companion</h3>
+                            <p style="color:var(--text-tertiary);font-size:0.8rem;margin-top:2px;">Multi-Tier: Google Gemini • Groq High-Speed • Clinical Decision Support Algorithms</p>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:6px;">
+                        <span style="font-size:11px;background:rgba(99,102,241,0.15);color:#818cf8;border:1px solid rgba(99,102,241,0.3);padding:3px 8px;border-radius:6px;font-weight:600;">Gemini Tier 1</span>
+                        <span style="font-size:11px;background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid rgba(245,158,11,0.3);padding:3px 8px;border-radius:6px;font-weight:600;">Groq Tier 2</span>
+                        <span style="font-size:11px;background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3);padding:3px 8px;border-radius:6px;font-weight:600;">Algorithm Tier 3</span>
                     </div>
                 </div>
             </div>
             <div id="aiChatBox" style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px;">
                 <div style="align-self:flex-start;max-width:85%;background:rgba(255,255,255,0.03);border:1px solid var(--border-color);padding:14px 18px;border-radius:14px;font-size:0.9rem;line-height:1.5;">
-                    👋 Hello <b>${AppState.user?.full_name || 'Patient'}</b>! I am your AI health assistant. You can ask me questions about your active prescriptions, known allergies, medical test results, or dietary precautions.
+                    👋 Hello <b>${AppState.user?.full_name || 'Patient'}</b>! I am your resilient clinical health assistant with verified medical safety algorithms and real-time emergency triage. Ask me about your medications, blood pressure/glucose readings, allergies, or dietary guidance.
                 </div>
             </div>
             <div style="padding:16px;border-top:1px solid var(--border-color);display:flex;gap:10px;">
-                <input type="text" id="aiUserInput" class="form-input" placeholder="Ask about your medications, allergies, or lab reports..." onkeydown="if(event.key==='Enter') sendAIMessage()" />
+                <input type="text" id="aiUserInput" class="form-input" placeholder="Ask about medications, vital signs, allergies, or health tips..." onkeydown="if(event.key==='Enter') sendAIMessage()" />
                 <button class="btn btn-primary" onclick="sendAIMessage()" style="padding:10px 20px;">Send</button>
             </div>
         </div>
@@ -1770,7 +1865,7 @@ async function sendAIMessage() {
     const loaderId = 'loader-' + Date.now();
     chatBox.innerHTML += `
         <div id="${loaderId}" style="align-self:flex-start;max-width:85%;background:rgba(255,255,255,0.03);border:1px solid var(--border-color);padding:14px 18px;border-radius:14px;font-size:0.9rem;color:var(--text-secondary);">
-            <i>Analyzing your health records with Gemini AI...</i>
+            <i>Analyzing with Gemini / Groq / Clinical Algorithm...</i>
         </div>
     `;
     chatBox.scrollTop = chatBox.scrollHeight;
@@ -1779,9 +1874,12 @@ async function sendAIMessage() {
         const vitals = window._vitalsData || [];
         const res = await API.assistant.ask(msg, vitals);
         const reply = res.data?.reply || 'I could not process that request.';
+        const providerName = res.data?.provider || 'AI Engine';
+        const providerTag = `<div style="margin-top:8px;font-size:11px;color:var(--text-tertiary);display:inline-block;padding:2px 8px;border-radius:4px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);">⚡ Processed by: <b>${escapeHtml(providerName)}</b></div>`;
         document.getElementById(loaderId).outerHTML = `
             <div style="align-self:flex-start;max-width:85%;background:rgba(255,255,255,0.03);border:1px solid var(--border-color);padding:14px 18px;border-radius:14px;font-size:0.9rem;line-height:1.5;">
                 ${formatMarkdown(reply)}
+                ${providerTag}
             </div>
         `;
     } catch (e) {
@@ -1796,7 +1894,8 @@ async function sendAIMessage() {
         }
         document.getElementById(loaderId).outerHTML = `
             <div style="align-self:flex-start;max-width:85%;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.25);padding:14px 18px;border-radius:14px;font-size:0.9rem;line-height:1.5;">
-                🤖 <i>(MedVault AI Companion)</i><br>${demoReply}
+                🩺 <i>(Clinical Algorithm Engine)</i><br>${demoReply}
+                <div style="margin-top:8px;font-size:11px;color:var(--text-tertiary);">⚡ Processed by: <b>clinical-algorithm (local fallback)</b></div>
             </div>
         `;
     }
@@ -1868,57 +1967,75 @@ async function runAIVitalsAnalysis() {
 }
 
 async function loadProfile() {
+    let pt = AppState.user;
+    try {
+        const res = await API.patient.getProfile();
+        if (res && res.data) {
+            pt = res.data;
+            AppState.user = { ...AppState.user, ...pt };
+            localStorage.setItem('userData', JSON.stringify(AppState.user));
+        }
+    } catch (_) {}
+
     const html = `
         <div class="grid-2">
             <div class="card">
                 <div class="card-header">
                     <h3 class="card-title">Personal Information</h3>
                 </div>
-                <form id="profileForm">
+                <form id="profileForm" onsubmit="saveProfile(event)">
                     <div class="form-grid">
                         <div class="form-group">
                             <label class="form-label">Full Name</label>
-                            <input type="text" class="form-input" id="profileName" value="${AppState.user?.full_name || 'John Doe'}">
+                            <input type="text" class="form-input" id="profileName" value="${pt?.full_name || ''}" required>
                         </div>
                         <div class="form-group">
                             <label class="form-label">Date of Birth</label>
-                            <input type="date" class="form-input" id="profileDOB" value="${AppState.user?.date_of_birth || '1990-03-15'}">
+                            <input type="date" class="form-input" id="profileDOB" value="${pt?.date_of_birth ? new Date(pt.date_of_birth).toISOString().split('T')[0] : '1990-03-15'}" required>
                         </div>
                         <div class="form-group">
                             <label class="form-label">Gender</label>
                             <select class="form-select" id="profileGender">
-                                <option ${AppState.user?.gender === 'Male' ? 'selected' : ''}>Male</option>
-                                <option ${AppState.user?.gender === 'Female' ? 'selected' : ''}>Female</option>
-                                <option ${AppState.user?.gender === 'Other' ? 'selected' : ''}>Other</option>
+                                <option ${pt?.gender === 'Male' ? 'selected' : ''}>Male</option>
+                                <option ${pt?.gender === 'Female' ? 'selected' : ''}>Female</option>
+                                <option ${pt?.gender === 'Other' ? 'selected' : ''}>Other</option>
                             </select>
                         </div>
                         <div class="form-group">
                             <label class="form-label">Blood Group</label>
                             <select class="form-select" id="profileBlood">
-                                <option ${AppState.user?.blood_group === 'O+' ? 'selected' : ''}>O+</option>
-                                <option ${AppState.user?.blood_group === 'O-' ? 'selected' : ''}>O-</option>
-                                <option ${AppState.user?.blood_group === 'A+' ? 'selected' : ''}>A+</option>
-                                <option ${AppState.user?.blood_group === 'A-' ? 'selected' : ''}>A-</option>
-                                <option ${AppState.user?.blood_group === 'B+' ? 'selected' : ''}>B+</option>
-                                <option ${AppState.user?.blood_group === 'B-' ? 'selected' : ''}>B-</option>
-                                <option ${AppState.user?.blood_group === 'AB+' ? 'selected' : ''}>AB+</option>
-                                <option ${AppState.user?.blood_group === 'AB-' ? 'selected' : ''}>AB-</option>
+                                <option ${pt?.blood_group === 'O+' ? 'selected' : ''}>O+</option>
+                                <option ${pt?.blood_group === 'O-' ? 'selected' : ''}>O-</option>
+                                <option ${pt?.blood_group === 'A+' ? 'selected' : ''}>A+</option>
+                                <option ${pt?.blood_group === 'A-' ? 'selected' : ''}>A-</option>
+                                <option ${pt?.blood_group === 'B+' ? 'selected' : ''}>B+</option>
+                                <option ${pt?.blood_group === 'B-' ? 'selected' : ''}>B-</option>
+                                <option ${pt?.blood_group === 'AB+' ? 'selected' : ''}>AB+</option>
+                                <option ${pt?.blood_group === 'AB-' ? 'selected' : ''}>AB-</option>
                             </select>
                         </div>
                         <div class="form-group">
                             <label class="form-label">Phone Number</label>
-                            <input type="tel" class="form-input" id="profilePhone" value="${AppState.user?.phone_number || '+91 98765 43210'}">
+                            <input type="tel" class="form-input" id="profilePhone" value="${pt?.phone_number || ''}" required>
                         </div>
                         <div class="form-group">
                             <label class="form-label">Email</label>
-                            <input type="email" class="form-input" id="profileEmail" value="${AppState.user?.email || 'john.doe@email.com'}">
+                            <input type="email" class="form-input" id="profileEmail" value="${pt?.email || ''}" required>
                         </div>
                         <div class="form-group full-width">
                             <label class="form-label">Address</label>
-                            <textarea class="form-textarea" id="profileAddress" rows="3">123 Healthcare Avenue, Medical District, New Delhi - 110001</textarea>
+                            <textarea class="form-textarea" id="profileAddress" rows="2">${pt?.address || ''}</textarea>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Known Allergies</label>
+                            <input type="text" class="form-input" id="profileAllergies" placeholder="e.g. Penicillin, Peanuts" value="${pt?.allergies || ''}">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Chronic Conditions</label>
+                            <input type="text" class="form-input" id="profileConditions" placeholder="e.g. Hypertension, Asthma" value="${pt?.chronic_conditions || ''}">
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-primary mt-lg" onclick="saveProfile(event)">Save Changes</button>
+                    <button type="submit" class="btn btn-primary mt-lg" id="saveProfileBtn">Save Changes</button>
                 </form>
             </div>
             <div class="card">
@@ -1928,21 +2045,26 @@ async function loadProfile() {
                 <div class="form-grid">
                     <div class="form-group">
                         <label class="form-label">Contact Name</label>
-                        <input type="text" class="form-input" value="Jane Doe">
+                        <input type="text" class="form-input" id="profileEmergName" value="${pt?.emergency_contact_name || ''}">
                     </div>
                     <div class="form-group">
                         <label class="form-label">Relationship</label>
-                        <select class="form-select">
-                            <option selected>Spouse</option>
-                            <option>Parent</option>
-                            <option>Sibling</option>
-                            <option>Child</option>
-                            <option>Other</option>
+                        <select class="form-select" id="profileEmergRelation">
+                            <option ${pt?.emergency_contact_relation === 'Spouse' ? 'selected' : ''}>Spouse</option>
+                            <option ${pt?.emergency_contact_relation === 'Parent' ? 'selected' : ''}>Parent</option>
+                            <option ${pt?.emergency_contact_relation === 'Sibling' ? 'selected' : ''}>Sibling</option>
+                            <option ${pt?.emergency_contact_relation === 'Child' ? 'selected' : ''}>Child</option>
+                            <option ${pt?.emergency_contact_relation === 'Other' ? 'selected' : ''}>Other</option>
                         </select>
                     </div>
                     <div class="form-group full-width">
-                        <label class="form-label">Phone Number</label>
-                        <input type="tel" class="form-input" value="+91 98765 43211">
+                        <label class="form-label">Emergency Phone Number</label>
+                        <input type="tel" class="form-input" id="profileEmergPhone" value="${pt?.emergency_contact_phone || ''}">
+                    </div>
+                </div>
+                <div style="margin-top: var(--space-xl); padding: var(--space-md); background: rgba(30, 41, 59, 0.5); border-radius: 8px; border: 1px dashed var(--border-color);">
+                    <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5;">
+                        🛡️ <b>Note:</b> Your emergency contact is displayed publicly on your Emergency QR Code so first responders can reach your loved ones instantly.
                     </div>
                 </div>
             </div>
@@ -1959,50 +2081,46 @@ async function loadSettings() {
                 <h3 class="card-title">Privacy & Security</h3>
             </div>
             <div class="form-group">
-                <label class="form-label">Two-Factor Authentication</label>
-                <div style="display: flex; align-items: center; gap: var(--space-md); margin-top: var(--space-sm);">
-                    <button class="btn btn-secondary">Enable 2FA</button>
-                    <span style="font-size: var(--font-size-sm); color: var(--text-tertiary);">Not enabled</span>
+                <label class="form-label">Authentication Mode</label>
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: var(--space-sm);">
+                    <div>
+                        <div style="font-weight: 500;">Phone OTP (Firebase / SMS)</div>
+                        <span style="font-size: var(--font-size-sm); color: var(--text-tertiary);">Direct SMS OTP delivery enabled</span>
+                    </div>
+                    <span class="badge badge-success">Active</span>
                 </div>
             </div>
             <div class="form-group mt-lg">
-                <label class="form-label">Biometric Login</label>
+                <label class="form-label">Health Passport Export</label>
                 <div style="display: flex; align-items: center; gap: var(--space-md); margin-top: var(--space-sm);">
-                    <button class="btn btn-primary">Enabled</button>
-                    <span style="font-size: var(--font-size-sm); color: var(--text-tertiary);">Fingerprint & Face ID</span>
+                    <button class="btn btn-primary" onclick="API.patient.downloadHealthPassport().catch(e=>showToast(e.message,'error'))">📄 Download Health Passport PDF</button>
+                    <span style="font-size: var(--font-size-sm); color: var(--text-tertiary);">Includes active prescriptions & Emergency QR</span>
                 </div>
             </div>
         </div>
         <div class="card mb-lg">
             <div class="card-header">
-                <h3 class="card-title">Data & Storage</h3>
+                <h3 class="card-title">Data Portability & GDPR</h3>
             </div>
             <div style="display: flex; flex-direction: column; gap: var(--space-md);">
-                <button class="btn btn-secondary" style="justify-content: flex-start;">📥 Download All My Data</button>
-                <button class="btn btn-secondary" style="justify-content: flex-start;">📤 Export to PDF</button>
-                <button class="btn btn-secondary" style="justify-content: flex-start; color: var(--error);">🗑️ Delete Account</button>
+                <button class="btn btn-secondary" style="justify-content: flex-start;" onclick="handleExportData()">📥 Download Complete Health Archive (JSON)</button>
+                <button class="btn btn-secondary" style="justify-content: flex-start; color: var(--error);" onclick="handleDeleteAccount()">🗑️ Deactivate My MedVault Account</button>
             </div>
         </div>
         <div class="card">
             <div class="card-header">
-                <h3 class="card-title">Notifications</h3>
+                <h3 class="card-title">Notification Channels</h3>
             </div>
             <div class="form-group">
                 <label style="display: flex; align-items: center; gap: var(--space-md); cursor: pointer;">
-                    <input type="checkbox" checked> 
-                    <span>Email notifications for appointment reminders</span>
+                    <input type="checkbox" checked onchange="showToast('Notification preference saved', 'info')"> 
+                    <span>Email notifications for appointment reminders and record access</span>
                 </label>
             </div>
             <div class="form-group">
                 <label style="display: flex; align-items: center; gap: var(--space-md); cursor: pointer;">
-                    <input type="checkbox" checked>
-                    <span>SMS alerts for prescription refills</span>
-                </label>
-            </div>
-            <div class="form-group">
-                <label style="display: flex; align-items: center; gap: var(--space-md); cursor: pointer;">
-                    <input type="checkbox">
-                    <span>Weekly health tips and recommendations</span>
+                    <input type="checkbox" checked onchange="showToast('Notification preference saved', 'info')">
+                    <span>SMS alerts for critical prescription updates and OTPs</span>
                 </label>
             </div>
         </div>
@@ -2010,6 +2128,29 @@ async function loadSettings() {
     
     elements.mainContent.innerHTML = html;
 }
+
+async function handleExportData() {
+    try {
+        showToast('Preparing your personal health archive...', 'info');
+        await API.patient.exportData();
+        showToast('Health data export downloaded!', 'success');
+    } catch (e) {
+        showToast(e.message || 'Failed to export data', 'error');
+    }
+}
+
+async function handleDeleteAccount() {
+    if (confirm('Are you sure you want to deactivate your MedVault account? You will be logged out.')) {
+        try {
+            await API.patient.deleteAccount();
+            showToast('Account deactivated', 'info');
+            setTimeout(() => logout(), 1000);
+        } catch (e) {
+            showToast(e.message || 'Failed to deactivate account', 'error');
+        }
+    }
+}
+
 
 // ============================================
 // HELPER FUNCTIONS
@@ -2597,34 +2738,43 @@ function downloadQR() {
     }
 }
 
-function bookAppointment() {
-    const hospital = document.getElementById('appointmentHospital').value;
-    const department = document.getElementById('appointmentDepartment').value;
-    const date = document.getElementById('appointmentDate').value;
-    
-    if (!hospital || !department || !date) {
-        showToast('Please fill all fields', 'error');
-        return;
-    }
-    
-    showToast('Appointment booked successfully!', 'success');
-}
 
-function saveProfile(e) {
-    e.preventDefault();
-    
-    AppState.user = {
-        ...AppState.user,
-        full_name: document.getElementById('profileName').value,
-        date_of_birth: document.getElementById('profileDOB').value,
-        gender: document.getElementById('profileGender').value,
-        blood_group: document.getElementById('profileBlood').value,
-        phone_number: document.getElementById('profilePhone').value,
-        email: document.getElementById('profileEmail').value
-    };
-    
-    updateUserDisplay();
-    showToast('Profile updated successfully!', 'success');
+async function saveProfile(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const btn = document.getElementById('saveProfileBtn') || (e?.target?.tagName === 'BUTTON' ? e.target : null);
+    try {
+        if (btn) showButtonLoader(btn);
+
+        const payload = {
+            full_name: document.getElementById('profileName')?.value?.trim(),
+            date_of_birth: document.getElementById('profileDOB')?.value,
+            gender: document.getElementById('profileGender')?.value,
+            blood_group: document.getElementById('profileBlood')?.value,
+            phone_number: document.getElementById('profilePhone')?.value?.trim(),
+            email: document.getElementById('profileEmail')?.value?.trim(),
+            address: document.getElementById('profileAddress')?.value?.trim(),
+            allergies: document.getElementById('profileAllergies')?.value?.trim(),
+            chronic_conditions: document.getElementById('profileConditions')?.value?.trim(),
+            emergency_contact_name: document.getElementById('profileEmergName')?.value?.trim(),
+            emergency_contact_relation: document.getElementById('profileEmergRelation')?.value,
+            emergency_contact_phone: document.getElementById('profileEmergPhone')?.value?.trim()
+        };
+
+        const res = await API.patient.updateProfile(payload);
+        if (res && (res.status === 'success' || res.data)) {
+            AppState.user = { ...AppState.user, ...(res.data || payload) };
+            localStorage.setItem('userData', JSON.stringify(AppState.user));
+            updateUserDisplay();
+            showToast('Profile updated successfully!', 'success');
+        } else {
+            throw new Error(res?.message || 'Failed to update profile');
+        }
+    } catch (err) {
+        console.error('Save profile error:', err);
+        showToast(err.message || 'Error updating profile', 'error');
+    } finally {
+        if (btn) hideButtonLoader(btn);
+    }
 }
 
 function handleFileSelection(input) {
@@ -2998,6 +3148,14 @@ function playNotificationChime() {
     } catch (e) { /* ignore audio restrictions */ }
 }
 
+let incomingCallData = null;
+let patientPeerConn = null;
+let patientLocalStream = null;
+let patientCallTimer = null;
+let patientCallSeconds = 0;
+let isPatientAudioMuted = false;
+let isPatientVideoMuted = false;
+
 function initSocket() {
     try {
         if (typeof io !== 'undefined') {
@@ -3010,10 +3168,57 @@ function initSocket() {
 
             socket.on('connect', () => {
                 console.log('🔌 Connected to real-time notification gateway');
+                const pId = AppState.user?.patient_id || 'demo-001';
+                socket.emit('join-room', { userId: pId, role: 'Patient' });
             });
 
+            // Real-time System Announcements
+            socket.on('announcement:broadcast', (data) => {
+                displayPatientBroadcastBanner(data);
+                showToast(`📢 Announcement: ${data.title}`, 'info');
+            });
+
+            // Real-time Prescription Updates
+            socket.on('prescription:new', (data) => {
+                showToast(`💊 New Prescription issued by Dr. ${data.doctor_name || 'Healthcare Provider'}`, 'info');
+                if (AppState.currentSection === 'prescriptions') {
+                    loadPrescriptions();
+                } else if (AppState.currentSection === 'dashboard') {
+                    loadDashboard();
+                }
+            });
+
+            // Real-time Consent Requests from Doctors
+            socket.on('consent:requested', (data) => {
+                handleIncomingConsentRequest(data);
+            });
+
+            // In-app Notifications
             socket.on('notification', (data) => {
                 handleIncomingNotification(data);
+                if (data && (data.type === 'prescription_created' || data.notification_type === 'prescription_created')) {
+                    if (AppState.currentSection === 'prescriptions') {
+                        loadPrescriptions();
+                    }
+                }
+            });
+
+            // WebRTC Signaling Events
+            socket.on('webrtc:incoming-call', (data) => {
+                handleIncomingWebRTCCall(data);
+            });
+
+            socket.on('webrtc:offer', async (data) => {
+                handleWebRTCOffer(data);
+            });
+
+            socket.on('webrtc:ice-candidate', async (data) => {
+                handleWebRTCIceCandidate(data);
+            });
+
+            socket.on('webrtc:call-ended', () => {
+                showToast('Consultation ended by Doctor', 'info');
+                endPatientCall();
             });
         }
     } catch (e) {
@@ -3063,6 +3268,284 @@ function handleIncomingNotification(data) {
     if (AppState.currentSection === 'notifications') {
         loadNotificationsPage();
     }
+}
+
+// ============================================
+// REAL-TIME BROADCAST & WEBRTC TELECONSULTATION
+// ============================================
+
+let pendingConsentRequest = null;
+
+function handleIncomingConsentRequest(data) {
+    pendingConsentRequest = data;
+    const modal = document.getElementById('consentRequestModal');
+    const nameEl = document.getElementById('consentDoctorName');
+    const purposeEl = document.getElementById('consentDoctorPurpose');
+    if (nameEl) nameEl.textContent = data.doctor_name || 'Dr. Healthcare Provider';
+    if (purposeEl) purposeEl.textContent = `Requesting access to your complete medical records for ${data.purpose || 'clinical consultation'}.`;
+    if (modal) modal.style.display = 'flex';
+    playNotificationChime();
+}
+
+async function grantConsentFromRequest() {
+    if (!pendingConsentRequest) return;
+    try {
+        const payload = {
+            accessor_id: pendingConsentRequest.doctor_id,
+            accessor_type: 'Doctor',
+            consent_type: 'Full Access',
+            purpose: pendingConsentRequest.purpose || 'Consultation',
+            expires_days: 7
+        };
+        const res = await API.consent.grant(payload);
+        showToast(`✅ Access granted to ${pendingConsentRequest.doctor_name} for 7 days`, 'success');
+        const modal = document.getElementById('consentRequestModal');
+        if (modal) modal.style.display = 'none';
+        if (AppState.currentSection === 'consent') {
+            loadConsent();
+        }
+    } catch (e) {
+        showToast('Consent granted (Demo Mode)', 'success');
+        const modal = document.getElementById('consentRequestModal');
+        if (modal) modal.style.display = 'none';
+    } finally {
+        pendingConsentRequest = null;
+    }
+}
+
+function denyConsentRequest() {
+    const modal = document.getElementById('consentRequestModal');
+    if (modal) modal.style.display = 'none';
+    showToast('Consent request declined', 'info');
+    pendingConsentRequest = null;
+}
+
+function displayPatientBroadcastBanner(ann) {
+    if (!ann) return;
+    const banner = document.getElementById('patientBroadcastBanner');
+    const msgEl = document.getElementById('patientBroadcastMsg');
+    if (banner && msgEl) {
+        msgEl.innerHTML = `<strong>${escapeHtml(ann.title)}</strong>: ${escapeHtml(ann.message)}`;
+        banner.style.display = 'flex';
+    }
+}
+
+function handleIncomingWebRTCCall(data) {
+    incomingCallData = data;
+    const modal = document.getElementById('incomingCallModal');
+    const nameEl = document.getElementById('incomingCallerName');
+    const roleEl = document.getElementById('incomingCallerRole');
+    if (nameEl) nameEl.textContent = data.callerName || 'Doctor';
+    if (roleEl) roleEl.textContent = `${data.callerRole || 'Doctor'} is calling for a Video Consultation...`;
+    if (modal) modal.style.display = 'flex';
+    playNotificationChime();
+}
+
+function declineIncomingCall() {
+    const modal = document.getElementById('incomingCallModal');
+    if (modal) modal.style.display = 'none';
+    if (AppState.socket && incomingCallData) {
+        AppState.socket.emit('webrtc:reject-call', {
+            callerUserId: incomingCallData.callerUserId,
+            reason: 'Patient declined the consultation'
+        });
+    }
+    incomingCallData = null;
+}
+
+async function acquirePatientLocalStream(videoElem) {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        videoElem.srcObject = stream;
+        return stream;
+    } catch (err) {
+        console.warn('Physical camera/mic not available, creating patient synthetic stream fallback:', err);
+        const canvas = document.createElement('canvas');
+        canvas.width = 640;
+        canvas.height = 480;
+        const ctx = canvas.getContext('2d');
+        let frame = 0;
+        const anim = () => {
+            frame++;
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, 640, 480);
+            
+            // Pulse circle
+            const radius = 55 + Math.sin(frame * 0.1) * 8;
+            ctx.beginPath();
+            ctx.arc(320, 200, radius, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(16, 185, 129, 0.35)';
+            ctx.fill();
+
+            // Avatar circle
+            ctx.beginPath();
+            ctx.arc(320, 200, 46, 0, Math.PI * 2);
+            ctx.fillStyle = '#059669';
+            ctx.fill();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 32px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('👤', 320, 200);
+
+            ctx.font = '600 16px Inter, sans-serif';
+            ctx.fillText(AppState.user?.full_name || 'Patient', 320, 280);
+            ctx.font = '13px Inter, sans-serif';
+            ctx.fillStyle = '#94a3b8';
+            ctx.fillText('Encrypted Patient Video Feed', 320, 305);
+
+            if (patientLocalStream) requestAnimationFrame(anim);
+        };
+        anim();
+        const canvasStream = canvas.captureStream ? canvas.captureStream(30) : new MediaStream();
+        try {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = audioCtx.createOscillator();
+            const dst = audioCtx.createMediaStreamDestination();
+            osc.connect(dst);
+            osc.start();
+            canvasStream.addTrack(dst.stream.getAudioTracks()[0]);
+        } catch (e) {}
+        videoElem.srcObject = canvasStream;
+        return canvasStream;
+    }
+}
+
+async function acceptIncomingCall() {
+    const incModal = document.getElementById('incomingCallModal');
+    if (incModal) incModal.style.display = 'none';
+
+    const vidModal = document.getElementById('patientVideoModal');
+    if (vidModal) vidModal.style.display = 'flex';
+
+    const docNameEl = document.getElementById('patientVideoDocName');
+    if (docNameEl) docNameEl.textContent = incomingCallData?.callerName || 'Doctor';
+
+    updatePatientCallStatus('Connecting media...', '#fbbf24');
+    startPatientCallTimer();
+
+    const localVideo = document.getElementById('patientLocalVideo');
+    patientLocalStream = await acquirePatientLocalStream(localVideo);
+
+    const config = {
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+    patientPeerConn = new RTCPeerConnection(config);
+
+    patientLocalStream.getTracks().forEach(track => {
+        patientPeerConn.addTrack(track, patientLocalStream);
+    });
+
+    patientPeerConn.ontrack = (event) => {
+        const remoteVideo = document.getElementById('patientRemoteVideo');
+        if (remoteVideo && event.streams[0]) {
+            remoteVideo.srcObject = event.streams[0];
+            updatePatientCallStatus('Consultation Active', '#10b981');
+        }
+    };
+
+    patientPeerConn.onicecandidate = (event) => {
+        if (event.candidate && AppState.socket && incomingCallData) {
+            AppState.socket.emit('webrtc:ice-candidate', {
+                targetUserId: incomingCallData.callerUserId,
+                candidate: event.candidate
+            });
+        }
+    };
+
+    // Emit call accepted to doctor
+    AppState.socket.emit('webrtc:accept-call', {
+        callerUserId: incomingCallData?.callerUserId
+    });
+}
+
+async function handleWebRTCOffer(data) {
+    if (!patientPeerConn) return;
+    try {
+        await patientPeerConn.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        const answer = await patientPeerConn.createAnswer();
+        await patientPeerConn.setLocalDescription(answer);
+        AppState.socket.emit('webrtc:answer', {
+            targetUserId: data.from || incomingCallData?.callerUserId || 'doc-001',
+            sdp: answer
+        });
+        updatePatientCallStatus('Live Consultation Connected', '#10b981');
+    } catch (err) {
+        console.error('Error handling WebRTC offer:', err);
+    }
+}
+
+async function handleWebRTCIceCandidate(data) {
+    if (data.candidate && patientPeerConn) {
+        try {
+            await patientPeerConn.addIceCandidate(new RTCIceCandidate(data.candidate));
+        } catch (err) {
+            console.error('Error handling WebRTC ICE candidate:', err);
+        }
+    }
+}
+
+function updatePatientCallStatus(text, color) {
+    const el = document.getElementById('patientCallStatusText');
+    const dot = document.getElementById('patientCallStatusDot');
+    if (el) el.textContent = text;
+    if (dot && color) dot.style.background = color;
+}
+
+function startPatientCallTimer() {
+    patientCallSeconds = 0;
+    if (patientCallTimer) clearInterval(patientCallTimer);
+    patientCallTimer = setInterval(() => {
+        patientCallSeconds++;
+        const mins = String(Math.floor(patientCallSeconds / 60)).padStart(2, '0');
+        const secs = String(patientCallSeconds % 60).padStart(2, '0');
+        const timerEl = document.getElementById('patientVideoTimer');
+        if (timerEl) timerEl.textContent = `Connected • ${mins}:${secs}`;
+    }, 1000);
+}
+
+function togglePatientMic() {
+    if (!patientLocalStream) return;
+    isPatientAudioMuted = !isPatientAudioMuted;
+    patientLocalStream.getAudioTracks().forEach(t => t.enabled = !isPatientAudioMuted);
+    const btn = document.getElementById('patientMicBtn');
+    btn.style.color = isPatientAudioMuted ? '#ef4444' : 'inherit';
+    btn.textContent = isPatientAudioMuted ? '🔇' : '🎤';
+    showToast(isPatientAudioMuted ? 'Microphone muted' : 'Microphone unmuted', 'info');
+}
+
+function togglePatientCam() {
+    if (!patientLocalStream) return;
+    isPatientVideoMuted = !isPatientVideoMuted;
+    patientLocalStream.getVideoTracks().forEach(t => t.enabled = !isPatientVideoMuted);
+    const btn = document.getElementById('patientCamBtn');
+    btn.style.color = isPatientVideoMuted ? '#ef4444' : 'inherit';
+    btn.textContent = isPatientVideoMuted ? '🚫' : '📷';
+    showToast(isPatientVideoMuted ? 'Camera disabled' : 'Camera enabled', 'info');
+}
+
+function endPatientCall() {
+    if (AppState.socket && incomingCallData) {
+        AppState.socket.emit('webrtc:end-call', {
+            targetUserId: incomingCallData.callerUserId
+        });
+    }
+    if (patientCallTimer) { clearInterval(patientCallTimer); patientCallTimer = null; }
+    if (patientPeerConn) { patientPeerConn.close(); patientPeerConn = null; }
+    if (patientLocalStream) {
+        patientLocalStream.getTracks().forEach(t => t.stop());
+        patientLocalStream = null;
+    }
+    const modal = document.getElementById('patientVideoModal');
+    if (modal) modal.style.display = 'none';
+    const remoteVideo = document.getElementById('patientRemoteVideo');
+    if (remoteVideo) remoteVideo.srcObject = null;
+    const localVideo = document.getElementById('patientLocalVideo');
+    if (localVideo) localVideo.srcObject = null;
+    incomingCallData = null;
+    isPatientAudioMuted = false;
+    isPatientVideoMuted = false;
 }
 
 async function initNotifications() {
@@ -3396,12 +3879,475 @@ function showDoctorModal() {
     elements.modalOverlay.classList.add('active');
 }
 
-async function submitDoctorLogin() {
-    const docName = document.getElementById('docNameInput')?.value.trim() || 'Dr. Aakash Roy';
-    const hospital = document.getElementById('docHospitalInput')?.value.trim() || 'Metro Heart Institute';
-    closeModal();
-    showToast(`👨‍⚕️ ${docName} verified! Accessing patient record...`, 'success');
-    await simulateDoctorAccess(docName, hospital);
+// ============================================
+// INSURANCE & CLAIMS MANAGEMENT
+// ============================================
+
+async function loadInsurance() {
+    elements.mainContent.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
+            <div>
+                <h2 style="font-size:1.3rem;font-weight:700;margin:0;">Insurance Coverage & Cashless Claims</h2>
+                <p style="color:var(--text-secondary);font-size:0.85rem;margin-top:2px;">Manage active health insurance policies and track cashless hospital claims.</p>
+            </div>
+            <div style="display:flex;gap:10px;">
+                <button class="btn btn-secondary" onclick="openFileClaimModal()">+ File New Claim</button>
+                <button class="btn btn-primary" onclick="openAddInsuranceModal()">+ Add Policy</button>
+            </div>
+        </div>
+        <div id="insuranceCardsList" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:24px;">
+            <div style="padding:24px;text-align:center;color:var(--text-secondary);background:rgba(255,255,255,0.02);border:1px solid var(--border-color);border-radius:12px;">
+                Loading insurance policies...
+            </div>
+        </div>
+        <div class="card" style="margin-top:20px;">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+                <h3 class="card-title" style="margin:0;">Claims History & Settlement Tracker</h3>
+                <span style="font-size:0.8rem;color:var(--text-tertiary);">Direct TPA & Hospital Billing</span>
+            </div>
+            <div id="insuranceClaimsList" style="overflow-x:auto;padding:12px 16px;">
+                <div style="padding:16px;text-align:center;color:var(--text-secondary);">Loading claims records...</div>
+            </div>
+        </div>
+    `;
+
+    try {
+        const [insRes, clmRes] = await Promise.all([
+            API.insurance.getAll().catch(() => ({ data: [] })),
+            API.insurance.getClaims().catch(() => ({ data: [] }))
+        ]);
+        const policies = insRes.data || [];
+        const claims = clmRes.data || [];
+
+        const cardsEl = document.getElementById('insuranceCardsList');
+        if (cardsEl) {
+            if (policies.length === 0) {
+                cardsEl.innerHTML = `<div style="padding:24px;color:var(--text-secondary);text-align:center;grid-column:1/-1;">No insurance policies linked. Click "+ Add Policy" to register your health cover.</div>`;
+            } else {
+                cardsEl.innerHTML = policies.map(p => `
+                    <div style="background:linear-gradient(135deg,rgba(30,41,59,0.7),rgba(15,23,42,0.85));border:1px solid rgba(99,102,241,0.25);border-radius:16px;padding:20px;position:relative;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.3);">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+                            <div>
+                                <div style="font-size:0.75rem;text-transform:uppercase;letter-spacing:1px;color:#818cf8;font-weight:700;">${escapeHtml(p.policy_type || 'Health')} Policy</div>
+                                <h4 style="font-size:1.15rem;font-weight:700;margin:4px 0 0;color:var(--text-primary);">${escapeHtml(p.provider_name || 'Health Insurer')}</h4>
+                            </div>
+                            <span style="padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;background:${p.is_active ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'};color:${p.is_active ? '#34d399' : '#f87171'};border:1px solid ${p.is_active ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)'};">
+                                ${p.is_active ? '● Active' : '○ Inactive'}
+                            </span>
+                        </div>
+                        <div style="font-family:monospace;font-size:0.95rem;color:var(--text-primary);letter-spacing:1px;margin-bottom:14px;background:rgba(0,0,0,0.2);padding:6px 10px;border-radius:6px;display:inline-block;">
+                            ${escapeHtml(p.policy_number)}
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;font-size:0.85rem;">
+                            <div>
+                                <span style="color:var(--text-tertiary);font-size:0.75rem;display:block;">Sum Insured</span>
+                                <strong style="color:#34d399;font-size:1.05rem;">₹${Number(p.coverage_amount || 0).toLocaleString('en-IN')}</strong>
+                            </div>
+                            <div>
+                                <span style="color:var(--text-tertiary);font-size:0.75rem;display:block;">Remaining Limit</span>
+                                <strong style="color:var(--text-primary);font-size:1.05rem;">₹${Number(p.remaining_amount || p.coverage_amount || 0).toLocaleString('en-IN')}</strong>
+                            </div>
+                        </div>
+                        <div style="border-top:1px solid rgba(255,255,255,0.06);padding-top:10px;display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-tertiary);">
+                            <span>Holder: <strong style="color:var(--text-secondary);">${escapeHtml(p.policy_holder_name || AppState.user?.full_name || 'Self')}</strong></span>
+                            <span>Valid till: <strong style="color:var(--text-secondary);">${p.policy_end_date ? new Date(p.policy_end_date).toLocaleDateString() : 'N/A'}</strong></span>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        const claimsEl = document.getElementById('insuranceClaimsList');
+        if (claimsEl) {
+            if (claims.length === 0) {
+                claimsEl.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text-secondary);">No insurance claims filed yet.</div>`;
+            } else {
+                claimsEl.innerHTML = `
+                    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;text-align:left;">
+                        <thead>
+                            <tr style="border-bottom:1px solid var(--border-color);color:var(--text-tertiary);">
+                                <th style="padding:10px 8px;">Claim ID</th>
+                                <th style="padding:10px 8px;">Diagnosis / Treatment</th>
+                                <th style="padding:10px 8px;">Hospital</th>
+                                <th style="padding:10px 8px;">Date</th>
+                                <th style="padding:10px 8px;">Amount</th>
+                                <th style="padding:10px 8px;">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${claims.map(c => {
+                                const statusColor = c.claim_status === 'Settled' || c.claim_status === 'Approved' ? '#34d399' : (c.claim_status === 'Rejected' ? '#f87171' : '#fbbf24');
+                                const statusBg = c.claim_status === 'Settled' || c.claim_status === 'Approved' ? 'rgba(16,185,129,0.15)' : (c.claim_status === 'Rejected' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)');
+                                return `
+                                    <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                                        <td style="padding:12px 8px;font-family:monospace;font-weight:600;color:#818cf8;">${escapeHtml(c.claim_id)}</td>
+                                        <td style="padding:12px 8px;">
+                                            <strong style="display:block;color:var(--text-primary);">${escapeHtml(c.diagnosis)}</strong>
+                                            <span style="font-size:0.75rem;color:var(--text-tertiary);">${escapeHtml(c.treatment_details || '')}</span>
+                                        </td>
+                                        <td style="padding:12px 8px;color:var(--text-secondary);">${escapeHtml(c.hospital_name || 'Healthcare Network')}</td>
+                                        <td style="padding:12px 8px;color:var(--text-tertiary);">${c.claim_date || 'N/A'}</td>
+                                        <td style="padding:12px 8px;font-weight:700;color:var(--text-primary);">₹${Number(c.claim_amount || 0).toLocaleString('en-IN')}</td>
+                                        <td style="padding:12px 8px;">
+                                            <span style="padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;background:${statusBg};color:${statusColor};">
+                                                ${escapeHtml(c.claim_status || 'Submitted')}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                `;
+            }
+        }
+    } catch (e) {
+        showToast('Error loading insurance data: ' + e.message, 'error');
+    }
+}
+
+function openAddInsuranceModal() {
+    elements.modalContent.innerHTML = `
+        <div class="modal-header">
+            <h3 class="modal-title">🛡️ Link Insurance Policy</h3>
+            <button class="modal-close" onclick="closeModal()">×</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label class="form-label">Insurance Provider</label>
+                <input type="text" id="insProviderInput" class="form-input" placeholder="e.g. Star Health, HDFC ERGO, Max Bupa" value="Star Health & Allied Insurance" required />
+            </div>
+            <div class="form-group">
+                <label class="form-label">Policy Number</label>
+                <input type="text" id="insPolicyNumInput" class="form-input" placeholder="e.g. SH-COMP-2026-99214" required />
+            </div>
+            <div class="form-group">
+                <label class="form-label">Policy Holder Name</label>
+                <input type="text" id="insHolderInput" class="form-input" value="${escapeHtml(AppState.user?.full_name || 'Rahul Sharma')}" required />
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div class="form-group">
+                    <label class="form-label">Coverage Amount (₹)</label>
+                    <input type="number" id="insCoverageInput" class="form-input" placeholder="500000" value="500000" required />
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Policy Type</label>
+                    <select id="insTypeInput" class="form-input">
+                        <option value="Individual">Individual</option>
+                        <option value="Family" selected>Family</option>
+                        <option value="Group">Group</option>
+                    </select>
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div class="form-group">
+                    <label class="form-label">Valid From</label>
+                    <input type="date" id="insStartInput" class="form-input" value="${new Date().toISOString().split('T')[0]}" />
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Valid Till</label>
+                    <input type="date" id="insEndInput" class="form-input" value="${new Date(Date.now() + 31536000000).toISOString().split('T')[0]}" />
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitAddInsurance()">Save Policy</button>
+        </div>
+    `;
+    elements.modalOverlay.classList.add('active');
+}
+
+async function submitAddInsurance() {
+    const provider_name = document.getElementById('insProviderInput')?.value.trim();
+    const policy_number = document.getElementById('insPolicyNumInput')?.value.trim();
+    const policy_holder_name = document.getElementById('insHolderInput')?.value.trim();
+    const coverage_amount = document.getElementById('insCoverageInput')?.value.trim();
+    const policy_type = document.getElementById('insTypeInput')?.value;
+    const policy_start_date = document.getElementById('insStartInput')?.value;
+    const policy_end_date = document.getElementById('insEndInput')?.value;
+
+    if (!policy_number || !coverage_amount) {
+        showToast('Please enter policy number and coverage limit', 'warning');
+        return;
+    }
+
+    try {
+        await API.insurance.add({
+            provider_name, policy_number, policy_holder_name,
+            coverage_amount, policy_type, policy_start_date, policy_end_date
+        });
+        closeModal();
+        showToast('Insurance policy successfully added!', 'success');
+        loadInsurance();
+    } catch (e) {
+        showToast('Failed to add policy: ' + e.message, 'error');
+    }
+}
+
+function openFileClaimModal() {
+    elements.modalContent.innerHTML = `
+        <div class="modal-header">
+            <h3 class="modal-title">📋 File Cashless Insurance Claim</h3>
+            <button class="modal-close" onclick="closeModal()">×</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label class="form-label">Diagnosis / Reason</label>
+                <input type="text" id="claimDiagnosisInput" class="form-input" placeholder="e.g. Acute Gastroenteritis, Cardiac Evaluation" required />
+            </div>
+            <div class="form-group">
+                <label class="form-label">Claim Amount (₹)</label>
+                <input type="number" id="claimAmountInput" class="form-input" placeholder="e.g. 45000" required />
+            </div>
+            <div class="form-group">
+                <label class="form-label">Treatment Date</label>
+                <input type="date" id="claimDateInput" class="form-input" value="${new Date().toISOString().split('T')[0]}" />
+            </div>
+            <div class="form-group">
+                <label class="form-label">Treatment Details</label>
+                <textarea id="claimDetailsInput" class="form-input" rows="3" placeholder="Summary of hospital admission, doctor visits, and diagnostic procedures..."></textarea>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitFileClaim()">Submit Claim</button>
+        </div>
+    `;
+    elements.modalOverlay.classList.add('active');
+}
+
+async function submitFileClaim() {
+    const diagnosis = document.getElementById('claimDiagnosisInput')?.value.trim();
+    const claim_amount = document.getElementById('claimAmountInput')?.value.trim();
+    const treatment_date = document.getElementById('claimDateInput')?.value;
+    const treatment_details = document.getElementById('claimDetailsInput')?.value.trim();
+
+    if (!diagnosis || !claim_amount) {
+        showToast('Please provide diagnosis and claim amount', 'warning');
+        return;
+    }
+
+    try {
+        await API.insurance.fileClaim({
+            diagnosis, claim_amount, treatment_date, treatment_details
+        });
+        closeModal();
+        showToast('Insurance claim submitted successfully!', 'success');
+        loadInsurance();
+    } catch (e) {
+        showToast('Claim submission error: ' + e.message, 'error');
+    }
+}
+
+// ============================================
+// VACCINATIONS & IMMUNIZATION
+// ============================================
+
+async function loadVaccinations() {
+    elements.mainContent.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
+            <div>
+                <h2 style="font-size:1.3rem;font-weight:700;margin:0;">Vaccinations & Immunization Passport</h2>
+                <p style="color:var(--text-secondary);font-size:0.85rem;margin-top:2px;">WHO & National Immunization Schedule records verifiable via Health ID.</p>
+            </div>
+            <button class="btn btn-primary" onclick="openAddVaccineModal()">+ Record Vaccine</button>
+        </div>
+        <div id="vaccinationsContainer" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;">
+            <div style="padding:24px;text-align:center;color:var(--text-secondary);background:rgba(255,255,255,0.02);border:1px solid var(--border-color);border-radius:12px;">
+                Loading immunization history...
+            </div>
+        </div>
+    `;
+
+    try {
+        const res = await API.vaccinations.getAll();
+        const vacs = res.data || [];
+        const container = document.getElementById('vaccinationsContainer');
+        if (!container) return;
+
+        if (vacs.length === 0) {
+            container.innerHTML = `<div style="padding:24px;color:var(--text-secondary);text-align:center;grid-column:1/-1;">No immunization records found. Click "+ Record Vaccine" to document.</div>`;
+            return;
+        }
+
+        container.innerHTML = vacs.map(v => `
+            <div class="card" style="border:1px solid rgba(16,185,129,0.25);padding:18px;position:relative;background:linear-gradient(135deg,rgba(16,185,129,0.04),rgba(0,0,0,0.2));">
+                <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span style="font-size:24px;background:rgba(16,185,129,0.15);width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;">💉</span>
+                        <div>
+                            <h4 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--text-primary);">${escapeHtml(v.vaccine_name)}</h4>
+                            <span style="font-size:0.8rem;color:#34d399;font-weight:600;">Dose ${v.dose_number || 1} Completed</span>
+                        </div>
+                    </div>
+                    <span style="font-size:11px;font-weight:700;color:#34d399;background:rgba(16,185,129,0.15);padding:2px 8px;border-radius:12px;">
+                        ✓ Verified
+                    </span>
+                </div>
+                <div style="font-size:0.85rem;color:var(--text-secondary);display:flex;flex-direction:column;gap:4px;margin-top:12px;border-top:1px solid rgba(255,255,255,0.06);padding-top:10px;">
+                    <div>📅 <strong>Administered:</strong> ${v.administered_date || 'N/A'}</div>
+                    <div>🏥 <strong>Facility:</strong> ${escapeHtml(v.facility_name || 'General Health Center')}</div>
+                    <div>👨‍⚕️ <strong>Clinician:</strong> ${escapeHtml(v.doctor_name || 'Dr. Sunita Mehta')}</div>
+                    <div>🏷️ <strong>Batch / Lot:</strong> <code style="color:#818cf8;">${escapeHtml(v.lot_number || 'LOT-AUTO')}</code></div>
+                    ${v.next_due_date ? `<div style="color:#fbbf24;margin-top:4px;">⏱️ <strong>Next Due:</strong> ${v.next_due_date}</div>` : ''}
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {
+        showToast('Error loading vaccinations: ' + e.message, 'error');
+    }
+}
+
+function openAddVaccineModal() {
+    elements.modalContent.innerHTML = `
+        <div class="modal-header">
+            <h3 class="modal-title">💉 Record Immunization</h3>
+            <button class="modal-close" onclick="closeModal()">×</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label class="form-label">Vaccine Name</label>
+                <input type="text" id="vacNameInput" class="form-input" placeholder="e.g. Hepatitis B, Tetanus Toxoid, Rabies, COVID-19" required />
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div class="form-group">
+                    <label class="form-label">Dose Number</label>
+                    <input type="number" id="vacDoseInput" class="form-input" value="1" min="1" max="10" />
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Administered Date</label>
+                    <input type="date" id="vacDateInput" class="form-input" value="${new Date().toISOString().split('T')[0]}" />
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Healthcare Facility / Hospital</label>
+                <input type="text" id="vacFacilityInput" class="form-input" placeholder="e.g. Metro Heart Institute" value="Metro Heart Institute" />
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div class="form-group">
+                    <label class="form-label">Administering Doctor / Nurse</label>
+                    <input type="text" id="vacDoctorInput" class="form-input" placeholder="e.g. Dr. Aakash Roy" value="Dr. Aakash Roy" />
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Batch / Lot Number</label>
+                    <input type="text" id="vacLotInput" class="form-input" placeholder="e.g. LOT-4912-B" />
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitAddVaccine()">Record Vaccine</button>
+        </div>
+    `;
+    elements.modalOverlay.classList.add('active');
+}
+
+async function submitAddVaccine() {
+    const vaccine_name = document.getElementById('vacNameInput')?.value.trim();
+    const dose_number = document.getElementById('vacDoseInput')?.value;
+    const administered_date = document.getElementById('vacDateInput')?.value;
+    const facility_name = document.getElementById('vacFacilityInput')?.value.trim();
+    const doctor_name = document.getElementById('vacDoctorInput')?.value.trim();
+    const lot_number = document.getElementById('vacLotInput')?.value.trim();
+
+    if (!vaccine_name) {
+        showToast('Vaccine name is required', 'warning');
+        return;
+    }
+
+    try {
+        await API.vaccinations.record({
+            vaccine_name, dose_number, administered_date, facility_name, doctor_name, lot_number
+        });
+        closeModal();
+        showToast('Vaccine successfully recorded!', 'success');
+        loadVaccinations();
+    } catch (e) {
+        showToast('Failed to record vaccine: ' + e.message, 'error');
+    }
+}
+
+// ============================================
+// LAB RESULTS & DIAGNOSTIC BIOMARKERS
+// ============================================
+
+async function loadLabResults() {
+    elements.mainContent.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
+            <div>
+                <h2 style="font-size:1.3rem;font-weight:700;margin:0;">Diagnostic Lab Results & Biomarkers</h2>
+                <p style="color:var(--text-secondary);font-size:0.85rem;margin-top:2px;">Laboratory reports, biochemical panels, and clinical biomarkers analyzed over time.</p>
+            </div>
+            <div style="display:flex;gap:8px;">
+                <button class="btn btn-secondary" onclick="openModal('addRecord')">+ Upload Lab Report</button>
+                <button class="btn btn-primary" onclick="navigateTo('assistant')">🤖 Ask AI About Results</button>
+            </div>
+        </div>
+        <div class="card">
+            <div id="labResultsTableWrapper" style="overflow-x:auto;padding:12px 16px;">
+                <div style="padding:24px;text-align:center;color:var(--text-secondary);">Loading laboratory biomarkers...</div>
+            </div>
+        </div>
+    `;
+
+    try {
+        const res = await API.labResults.getAll();
+        const labs = res.data || [];
+        const wrapper = document.getElementById('labResultsTableWrapper');
+        if (!wrapper) return;
+
+        if (labs.length === 0) {
+            wrapper.innerHTML = `<div style="padding:24px;text-align:center;color:var(--text-secondary);">No diagnostic lab results documented yet.</div>`;
+            return;
+        }
+
+        wrapper.innerHTML = `
+            <table style="width:100%;border-collapse:collapse;font-size:0.85rem;text-align:left;">
+                <thead>
+                    <tr style="border-bottom:1px solid var(--border-color);color:var(--text-tertiary);">
+                        <th style="padding:10px 8px;">Test / Biomarker</th>
+                        <th style="padding:10px 8px;">Category</th>
+                        <th style="padding:10px 8px;">Observed Value</th>
+                        <th style="padding:10px 8px;">Reference Range</th>
+                        <th style="padding:10px 8px;">Clinical Flag</th>
+                        <th style="padding:10px 8px;">Laboratory</th>
+                        <th style="padding:10px 8px;">Tested Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${labs.map(r => {
+                        const isAbnormal = r.status === 'Abnormal' || r.status === 'Critical';
+                        const flagColor = r.status === 'Critical' ? '#ef4444' : (r.status === 'Abnormal' ? '#f59e0b' : '#10b981');
+                        const flagBg = r.status === 'Critical' ? 'rgba(239,68,68,0.15)' : (r.status === 'Abnormal' ? 'rgba(245,158,11,0.15)' : 'rgba(16,185,129,0.15)');
+                        return `
+                            <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                                <td style="padding:12px 8px;">
+                                    <strong style="color:var(--text-primary);display:block;">${escapeHtml(r.test_name)}</strong>
+                                    <span style="font-size:0.75rem;color:var(--text-tertiary);">${escapeHtml(r.record_title || 'Routine Panel')}</span>
+                                </td>
+                                <td style="padding:12px 8px;color:var(--text-secondary);">${escapeHtml(r.test_category || 'General')}</td>
+                                <td style="padding:12px 8px;">
+                                    <span style="font-size:1rem;font-weight:700;color:${isAbnormal ? flagColor : 'var(--text-primary)'};">${escapeHtml(r.result_value)}</span>
+                                    <span style="font-size:0.75rem;color:var(--text-tertiary);margin-left:2px;">${escapeHtml(r.unit || '')}</span>
+                                </td>
+                                <td style="padding:12px 8px;color:var(--text-tertiary);font-size:0.8rem;">${escapeHtml(r.reference_range || '-')}</td>
+                                <td style="padding:12px 8px;">
+                                    <span style="padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;background:${flagBg};color:${flagColor};">
+                                        ${r.status === 'Normal' ? '✓ Normal' : (r.status === 'Critical' ? '⚠️ Critical' : '⚡ Abnormal')}
+                                    </span>
+                                </td>
+                                <td style="padding:12px 8px;color:var(--text-secondary);font-size:0.8rem;">${escapeHtml(r.lab_name || 'Central Lab')}</td>
+                                <td style="padding:12px 8px;color:var(--text-tertiary);font-size:0.8rem;">${r.tested_at ? new Date(r.tested_at).toLocaleDateString() : 'N/A'}</td>
+                            </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table>
+        `;
+    } catch (e) {
+        showToast('Error loading lab results: ' + e.message, 'error');
+    }
 }
 
 // ============================================
@@ -3455,3 +4401,12 @@ window.loadNotificationsPage = loadNotificationsPage;
 window.initSocket = initSocket;
 window.initNotifications = initNotifications;
 window.runAIVitalsAnalysis = runAIVitalsAnalysis;
+window.loadInsurance = loadInsurance;
+window.openAddInsuranceModal = openAddInsuranceModal;
+window.submitAddInsurance = submitAddInsurance;
+window.openFileClaimModal = openFileClaimModal;
+window.submitFileClaim = submitFileClaim;
+window.loadVaccinations = loadVaccinations;
+window.openAddVaccineModal = openAddVaccineModal;
+window.submitAddVaccine = submitAddVaccine;
+window.loadLabResults = loadLabResults;

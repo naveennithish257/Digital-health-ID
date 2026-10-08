@@ -1,7 +1,7 @@
 const http = require('http');
 const https = require('https');
 
-const BASE_URL = process.env.TEST_URL || 'https://medvault-backend-api.onrender.com';
+const BASE_URL = process.env.TEST_URL || (process.env.NODE_ENV === 'production' ? 'https://medvault-backend-api.onrender.com' : 'http://localhost:3000');
 console.log(`\n🔍 Verifying all MedVault features against: ${BASE_URL}\n`);
 
 function request(path, options = {}) {
@@ -20,7 +20,7 @@ function request(path, options = {}) {
         'Content-Type': 'application/json',
         ...(options.headers || {})
       },
-      timeout: 30000
+      timeout: 10000
     };
 
     const req = client.request(reqOpts, (res) => {
@@ -58,6 +58,24 @@ function request(path, options = {}) {
 
 async function runVerification() {
   const results = [];
+  let spawnedServer = null;
+
+  if (BASE_URL.includes('localhost') || BASE_URL.includes('127.0.0.1')) {
+    try {
+      await request('/api/health');
+    } catch (e) {
+      console.log('📡 Local server not running, booting in-process MedVault server on port 3000...');
+      const app = require('../server.js');
+      if (!app.httpServer.listening) {
+        await new Promise(resolve => {
+          spawnedServer = app.httpServer.listen(3000, () => {
+            console.log('🚀 In-process test server active on port 3000\n');
+            resolve();
+          });
+        });
+      }
+    }
+  }
 
   // Feature 1: Health & Database Connectivity
   try {
@@ -172,27 +190,90 @@ async function runVerification() {
     results.push({ feature: '7. Digital Health Passport PDF Generation', status: 'FAIL ❌', details: err.message });
   }
 
-  // Feature 8: Gemini AI Health Assistant
+  // Feature 8: Multi-Tier AI Health Assistant (Gemini / Groq / Clinical Algorithm)
   try {
     const res = await request('/api/assistant/chat', {
       method: 'POST',
       headers: { Authorization: 'Bearer demo-token' },
-      body: { message: 'Hello, what are my latest vital readings?' }
+      body: { message: 'Hello, what are my latest vital readings and active medications?' }
     });
     const ok = res.statusCode === 200 && res.body.data && res.body.data.reply;
     results.push({
-      feature: '8. AI Health Assistant (Gemini Powered)',
+      feature: '8. Multi-Tier AI Assistant (Gemini / Groq / Clinical Algorithms)',
       status: ok ? 'PASS ✅' : 'FAIL ❌',
-      details: ok ? `AI Response length: ${res.body.data.reply.length} chars` : `HTTP ${res.statusCode}`
+      details: ok ? `Provider: ${res.body.data.provider || 'AI Engine'} | Response: ${res.body.data.reply.length} chars` : `HTTP ${res.statusCode}`
     });
   } catch (err) {
-    results.push({ feature: '8. AI Health Assistant (Gemini Powered)', status: 'FAIL ❌', details: err.message });
+    results.push({ feature: '8. Multi-Tier AI Assistant (Gemini / Groq / Clinical Algorithms)', status: 'FAIL ❌', details: err.message });
+  }
+
+  // Feature 9: Insurance Coverage & Cashless Claims Management
+  try {
+    const res = await request('/api/patient/insurance', {
+      headers: { Authorization: 'Bearer demo-token' }
+    });
+    const ok = res.statusCode === 200 && Array.isArray(res.body.data);
+    results.push({
+      feature: '9. Insurance Coverage & Cashless Claims',
+      status: ok ? 'PASS ✅' : 'FAIL ❌',
+      details: ok ? `Retrieved ${res.body.data.length} insurance policy record(s)` : `HTTP ${res.statusCode}`
+    });
+  } catch (err) {
+    results.push({ feature: '9. Insurance Coverage & Cashless Claims', status: 'FAIL ❌', details: err.message });
+  }
+
+  // Feature 10: Vaccinations & Immunization Passport
+  try {
+    const res = await request('/api/patient/vaccinations', {
+      headers: { Authorization: 'Bearer demo-token' }
+    });
+    const ok = res.statusCode === 200 && Array.isArray(res.body.data);
+    results.push({
+      feature: '10. Vaccinations & Immunization Passport',
+      status: ok ? 'PASS ✅' : 'FAIL ❌',
+      details: ok ? `Retrieved ${res.body.data.length} immunization dose record(s)` : `HTTP ${res.statusCode}`
+    });
+  } catch (err) {
+    results.push({ feature: '10. Vaccinations & Immunization Passport', status: 'FAIL ❌', details: err.message });
+  }
+
+  // Feature 11: Diagnostic Lab Results & Clinical Biomarkers
+  try {
+    const res = await request('/api/patient/lab-results', {
+      headers: { Authorization: 'Bearer demo-token' }
+    });
+    const ok = res.statusCode === 200 && Array.isArray(res.body.data);
+    results.push({
+      feature: '11. Diagnostic Lab Results & Biomarkers',
+      status: ok ? 'PASS ✅' : 'FAIL ❌',
+      details: ok ? `Retrieved ${res.body.data.length} biomarker diagnostic record(s)` : `HTTP ${res.statusCode}`
+    });
+  } catch (err) {
+    results.push({ feature: '11. Diagnostic Lab Results & Biomarkers', status: 'FAIL ❌', details: err.message });
+  }
+
+  // Feature 12: Healthcare Facilities & Hospital Network
+  try {
+    const res = await request('/api/hospitals');
+    const ok = res.statusCode === 200 && Array.isArray(res.body.data);
+    results.push({
+      feature: '12. Healthcare Network & Hospitals Directory',
+      status: ok ? 'PASS ✅' : 'FAIL ❌',
+      details: ok ? `Retrieved ${res.body.data.length} registered hospital facility/facilities` : `HTTP ${res.statusCode}`
+    });
+  } catch (err) {
+    results.push({ feature: '12. Healthcare Network & Hospitals Directory', status: 'FAIL ❌', details: err.message });
   }
 
   console.table(results);
 
   const passedCount = results.filter(r => r.status.includes('PASS')).length;
   console.log(`\nSummary: ${passedCount}/${results.length} features passed verification.`);
+
+  if (spawnedServer) {
+    try { spawnedServer.close(); } catch (e) {}
+  }
+
   return passedCount === results.length;
 }
 

@@ -42,9 +42,11 @@
                     </div>
                     <div class="form-group">
                         <label class="form-label">Phone Number</label>
-                        <input type="tel" class="form-input" id="loginPhone" placeholder="8248728767 or +91 98765 43210" required>
+                        <input type="tel" class="form-input" id="loginPhone" placeholder="+91 8248728767" required>
                     </div>
-                    <button type="submit" class="btn btn-primary btn-block">Send OTP</button>
+                    <!-- Invisible reCAPTCHA for Firebase Phone Auth -->
+                    <div id="recaptcha-container"></div>
+                    <button type="submit" class="btn btn-primary btn-block" id="sendOtpBtn">Send OTP via SMS</button>
                     <div style="margin-top: 18px; display: flex; justify-content: space-between; font-size: 0.8rem;">
                         <a href="/admin" target="_blank" style="color: var(--text-tertiary, #94a3b8); text-decoration: none;">🛡️ Admin Portal</a>
                         <a href="#" onclick="showDoctorModal()" style="color: var(--text-tertiary, #94a3b8); text-decoration: none;">👨‍⚕️ Doctor Login</a>
@@ -196,6 +198,24 @@
                                     Appointments
                                 </a>
                             </li>
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="labresults">
+                                    <span class="nav-icon">🧪</span>
+                                    Lab Results
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="vaccinations">
+                                    <span class="nav-icon">💉</span>
+                                    Vaccinations
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="#" class="nav-link" data-section="insurance">
+                                    <span class="nav-icon">💳</span>
+                                    Insurance & Claims
+                                </a>
+                            </li>
                         </ul>
                     </div>
                     <div class="nav-section">
@@ -305,6 +325,15 @@
                     </div>
                 </header>
 
+                <!-- Real-time Broadcast Notice -->
+                <div id="patientBroadcastBanner" style="display:none;margin:16px 24px 0 24px;background:linear-gradient(135deg,rgba(99,102,241,0.22),rgba(16,185,129,0.22));border:1px solid rgba(99,102,241,0.4);border-radius:12px;padding:12px 18px;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 4px 16px rgba(0,0,0,0.2);">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span style="background:#6366f1;color:white;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;text-transform:uppercase;letter-spacing:0.5px;">Notice</span>
+                        <span id="patientBroadcastMsg" style="font-size:13px;font-weight:500;"></span>
+                    </div>
+                    <button onclick="document.getElementById('patientBroadcastBanner').style.display='none'" style="background:none;border:none;color:var(--text-muted, #94a3b8);cursor:pointer;font-size:16px;">✕</button>
+                </div>
+
                 <div class="content" id="mainContent">
                     <!-- Content will be dynamically loaded here -->
                 </div>
@@ -318,13 +347,89 @@
             </div>
         </div>
 
+        <!-- Incoming WebRTC Call Modal -->
+        <div class="modal-overlay" id="incomingCallModal" style="display:none;z-index:99999;align-items:center;justify-content:center;">
+            <div class="modal incoming-call-card" style="text-align:center;padding:36px;max-width:380px;background:#111827;border:1px solid rgba(255,255,255,0.1);border-radius:24px;box-shadow:0 20px 50px rgba(0,0,0,0.6);">
+                <div class="call-avatar-pulse" style="width:80px;height:80px;border-radius:50%;background:rgba(99,102,241,0.2);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:40px;border:2px solid #6366f1;">👨‍⚕️</div>
+                <h3 id="incomingCallerName" style="margin-bottom:6px;font-size:20px;font-weight:700;">Dr. Aakash Roy</h3>
+                <p id="incomingCallerRole" style="color:var(--text-secondary, #94a3b8);font-size:13px;margin-bottom:24px;">Incoming Teleconsultation Call...</p>
+                <div style="display:flex;gap:12px;justify-content:center;">
+                    <button class="btn btn-danger" onclick="declineIncomingCall()" style="flex:1;border-radius:12px;padding:12px 16px;">❌ Decline</button>
+                    <button class="btn btn-success" onclick="acceptIncomingCall()" style="flex:1;border-radius:12px;padding:12px 16px;">📞 Accept</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Patient WebRTC Video Consultation Modal -->
+        <div class="modal-overlay" id="patientVideoModal" style="display:none;z-index:99999;align-items:center;justify-content:center;">
+            <div class="modal" style="width:820px;max-width:96vw;background:#0d1322;border:1px solid rgba(255,255,255,0.1);border-radius:24px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,0.7);padding:0;">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 24px;background:#111827;border-bottom:1px solid rgba(255,255,255,0.08);">
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <span style="font-size:22px;">📹</span>
+                        <div>
+                            <h4 style="margin:0;font-size:15px;" id="patientVideoDocName">Dr. Aakash Roy</h4>
+                            <span style="font-size:11px;color:#10b981;" id="patientVideoTimer">Connected • 00:00</span>
+                        </div>
+                    </div>
+                    <button class="btn btn-ghost btn-icon" onclick="endPatientCall()">✕</button>
+                </div>
+                <div style="position:relative;width:100%;height:440px;background:#050811;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+                    <video id="patientRemoteVideo" autoplay playsinline style="width:100%;height:100%;object-fit:cover;background:#050811;"></video>
+                    <video id="patientLocalVideo" autoplay playsinline muted style="position:absolute;bottom:16px;right:16px;width:170px;height:115px;border-radius:12px;border:2px solid rgba(255,255,255,0.3);background:#111827;object-fit:cover;z-index:10;box-shadow:0 8px 24px rgba(0,0,0,0.6);"></video>
+                    <div id="patientCallStatusPill" style="position:absolute;top:16px;left:16px;padding:6px 14px;border-radius:20px;font-size:12px;font-weight:600;background:rgba(0,0,0,0.65);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.15);color:#fff;z-index:10;">
+                        <span id="patientCallStatusDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#10b981;margin-right:6px;"></span>
+                        <span id="patientCallStatusText">Connecting...</span>
+                    </div>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:center;gap:16px;padding:16px 24px;background:#111827;border-top:1px solid rgba(255,255,255,0.08);">
+                    <button class="btn btn-ghost" id="patientMicBtn" onclick="togglePatientMic()" style="width:48px;height:48px;border-radius:50%;padding:0;font-size:18px;border:1px solid rgba(255,255,255,0.15);" title="Mute/Unmute Mic">🎤</button>
+                    <button class="btn btn-ghost" id="patientCamBtn" onclick="togglePatientCam()" style="width:48px;height:48px;border-radius:50%;padding:0;font-size:18px;border:1px solid rgba(255,255,255,0.15);" title="Camera On/Off">📷</button>
+                    <button class="btn btn-danger" onclick="endPatientCall()" style="width:52px;height:52px;border-radius:50%;padding:0;font-size:18px;" title="End Call">🔴</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Incoming Consent Request Modal -->
+        <div class="modal-overlay" id="consentRequestModal" style="display:none;z-index:99999;align-items:center;justify-content:center;">
+            <div class="modal" style="text-align:center;padding:32px;max-width:420px;background:#111827;border:1px solid rgba(255,255,255,0.1);border-radius:24px;box-shadow:0 20px 50px rgba(0,0,0,0.6);">
+                <div style="width:72px;height:72px;border-radius:50%;background:rgba(99,102,241,0.2);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:36px;border:2px solid #6366f1;">🩺</div>
+                <h3 id="consentDoctorName" style="margin-bottom:6px;font-size:18px;font-weight:700;">Dr. Aakash Roy</h3>
+                <p style="color:var(--text-secondary, #94a3b8);font-size:13px;margin-bottom:12px;" id="consentDoctorPurpose">Requesting access to your complete medical records for clinical consultation.</p>
+                <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px;margin-bottom:20px;text-align:left;font-size:12px;color:var(--text-secondary,#94a3b8);">
+                    <div>🔒 <strong>Granular Protection:</strong> Access automatically expires in 7 days.</div>
+                    <div style="margin-top:4px;">⏱️ You can revoke access at any time from your Consent tab.</div>
+                </div>
+                <div style="display:flex;gap:12px;justify-content:center;">
+                    <button class="btn btn-secondary" onclick="denyConsentRequest()" style="flex:1;border-radius:12px;padding:12px 14px;">❌ Deny</button>
+                    <button class="btn btn-success" onclick="grantConsentFromRequest()" style="flex:1;border-radius:12px;padding:12px 14px;">✅ Grant (7 Days)</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Toast Notifications -->
         <div id="toastContainer" class="toast-container"></div>
     </div>
 
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="/js/api.js?v=2.0.4"></script>
-    <script src="/js/app.js?v=2.0.4"></script>
+
+    <!-- Firebase SDK (compat version for Phone Auth) -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+
+    <!-- Firebase Config (injected from window.FIREBASE_CONFIG set by server or defined here) -->
+    <script id="firebase-init">
+        // Firebase config - update FIREBASE_API_KEY and FIREBASE_APP_ID in your .env
+        // then add them here or have the server inject them
+        window.FIREBASE_CONFIG = window.FIREBASE_CONFIG || {
+            apiKey: "",  // set FIREBASE_API_KEY in .env and fill here
+            authDomain: "digital-health-id-8a079.firebaseapp.com",
+            projectId:  "digital-health-id-8a079",
+            appId: ""   // set FIREBASE_APP_ID in .env and fill here
+        };
+    </script>
+
+    <script src="/js/api.js?v=2.1.0"></script>
+    <script src="/js/app.js?v=2.1.0"></script>
 </body>
 </html>

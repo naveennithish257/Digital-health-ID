@@ -267,6 +267,136 @@
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes slideInRight { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
         @keyframes spin { to { transform: rotate(360deg); } }
+        /* REAL-TIME BROADCAST BANNER */
+        .broadcast-banner {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(16, 185, 129, 0.2));
+            border: 1px solid rgba(99, 102, 241, 0.35);
+            border-radius: var(--radius-sm);
+            padding: 12px 18px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+            animation: fadeIn 0.3s ease;
+        }
+        .broadcast-badge {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            background: var(--primary);
+            color: white;
+        }
+        .broadcast-text { font-size: 13px; font-weight: 500; color: var(--text); flex: 1; }
+
+        /* WEBRTC VIDEO CONSULTATION MODAL */
+        .webrtc-modal-box {
+            background: #0d1322;
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            width: 820px;
+            max-width: 95vw;
+            box-shadow: 0 24px 60px rgba(0,0,0,0.7);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .webrtc-video-stage {
+            position: relative;
+            width: 100%;
+            height: 440px;
+            background: #050811;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .webrtc-remote-video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #050811;
+        }
+        .webrtc-local-pip {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            width: 170px;
+            height: 115px;
+            border-radius: 12px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            background: #111827;
+            object-fit: cover;
+            z-index: 10;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+            transition: transform 0.2s ease;
+        }
+        .webrtc-local-pip:hover {
+            transform: scale(1.05);
+        }
+        .webrtc-status-pill {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            background: rgba(0,0,0,0.65);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.15);
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            z-index: 10;
+        }
+        .webrtc-controls {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            padding: 16px 24px;
+            background: #111827;
+            border-top: 1px solid var(--glass-border);
+        }
+        .webrtc-btn {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            border: 1px solid var(--glass-border);
+            background: rgba(255,255,255,0.06);
+            color: var(--text);
+            font-size: 18px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition);
+        }
+        .webrtc-btn:hover {
+            background: rgba(255,255,255,0.14);
+            transform: scale(1.06);
+        }
+        .webrtc-btn.off {
+            background: rgba(239, 68, 68, 0.2);
+            border-color: rgba(239, 68, 68, 0.4);
+            color: #ef4444;
+        }
+        .webrtc-btn-end {
+            background: #ef4444 !important;
+            border-color: #dc2626 !important;
+            color: white !important;
+            width: 52px;
+            height: 52px;
+        }
+        .webrtc-btn-end:hover {
+            background: #dc2626 !important;
+            transform: scale(1.08);
+        }
     </style>
 </head>
 <body>
@@ -286,11 +416,52 @@
                 <input type="tel" id="phoneInput" placeholder="+91 9876543210">
             </div>
             <button class="btn btn-primary" id="sendOtpBtn" onclick="sendDoctorOTP()">🔐 Send OTP</button>
-            <div class="demo-hint">
+            <div style="margin-top: 14px; text-align: center; font-size: 13px;">
+                <span style="color: var(--text-muted);">New practitioner?</span>
+                <a href="javascript:void(0)" onclick="showRegisterStep()" style="color: var(--primary); font-weight: 600; text-decoration: none; margin-left: 4px;">Register for Practice Access →</a>
+            </div>
+            <div class="demo-hint" style="margin-top: 14px;">
                 <strong>🚀 Demo Credentials</strong>
                 License: <code>MCI-DL-67842</code> &nbsp;|&nbsp; Phone: <code>+91 9876543210</code>
             </div>
         </div>
+
+        <div id="registerStep" style="display:none; text-align: left;">
+            <h3 style="font-size: 16px; margin-bottom: 12px; color: var(--text-primary); text-align: center;">Doctor Self-Registration</h3>
+            <div class="form-group">
+                <label>Full Name *</label>
+                <input type="text" id="regDocName" placeholder="Dr. Firstname Lastname">
+            </div>
+            <div class="form-group">
+                <label>Medical License Number *</label>
+                <input type="text" id="regDocLicense" placeholder="e.g. MCI-DL-12345">
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                <div class="form-group">
+                    <label>Specialization *</label>
+                    <input type="text" id="regDocSpec" placeholder="Cardiology">
+                </div>
+                <div class="form-group">
+                    <label>Experience (Years)</label>
+                    <input type="number" id="regDocExp" placeholder="5">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Qualification</label>
+                <input type="text" id="regDocQual" placeholder="MBBS, MD, DM">
+            </div>
+            <div class="form-group">
+                <label>Official Phone (+91...) *</label>
+                <input type="tel" id="regDocPhone" placeholder="+91 9876543210">
+            </div>
+            <div class="form-group">
+                <label>Email Address *</label>
+                <input type="email" id="regDocEmail" placeholder="doctor@hospital.org">
+            </div>
+            <button class="btn btn-primary" id="regDocBtn" style="width:100%;margin-top:6px;" onclick="submitDoctorRegistration()">📝 Submit for Verification</button>
+            <button class="btn btn-secondary" style="width:100%;margin-top:8px;" onclick="backToLogin()">← Back to Login</button>
+        </div>
+
         <div id="otpStep" class="otp-section">
             <p style="color:var(--text-muted);margin-bottom:20px;text-align:left;font-size:14px;">
                 📲 OTP sent. <strong style="color:#a5b4fc;">(Demo: use 1 2 3 4 5 6)</strong>
@@ -338,6 +509,24 @@
         </aside>
         <main class="content" id="mainContent">
 
+            <!-- BROADCAST BANNER -->
+            <div id="doctorBroadcastBanner" class="broadcast-banner" style="display:none;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span class="broadcast-badge">System Notice</span>
+                    <span class="broadcast-text" id="doctorBroadcastText"></span>
+                </div>
+                <button onclick="document.getElementById('doctorBroadcastBanner').style.display='none'" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;">✕</button>
+            </div>
+
+            <!-- SUSPENDED BANNER -->
+            <div id="doctorSuspendedBanner" style="display:none;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.35);color:#fca5a5;padding:14px 20px;border-radius:var(--radius-sm);margin-bottom:20px;align-items:center;gap:14px;">
+                <span style="font-size:24px;">⛔</span>
+                <div>
+                    <strong style="color:#ef4444;font-size:14px;">Account Suspended by Administrator</strong>
+                    <p style="font-size:13px;margin:2px 0 0 0;color:#fecaca;">Your clinical access has been temporarily suspended. Patient searching and prescription issuance are disabled.</p>
+                </div>
+            </div>
+
             <!-- PATIENT SEARCH -->
             <div id="page-search" class="page-content">
                 <div class="page-header">
@@ -363,6 +552,7 @@
                             <div class="patient-tags" id="patTags"></div>
                         </div>
                         <div style="margin-left:auto;display:flex;gap:10px;flex-wrap:wrap;">
+                            <button class="btn btn-primary btn-sm" onclick="startVideoConsultation()" id="startCallBtn">📹 Video Consult</button>
                             <button class="btn btn-success btn-sm" onclick="loadPatientRecords()" id="viewRecordsBtn">📂 View Records</button>
                             <button class="btn btn-secondary btn-sm" onclick="openRxModal()" id="newRxBtn">✍️ Issue Rx</button>
                         </div>
@@ -450,8 +640,39 @@
     </div>
 </div>
 
+<!-- WEBRTC VIDEO CONSULTATION MODAL -->
+<div class="modal-overlay" id="videoConsultModal" style="display:none;align-items:center;justify-content:center;z-index:9999;">
+    <div class="webrtc-modal-box" onclick="event.stopPropagation()">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 24px;background:#111827;border-bottom:1px solid rgba(255,255,255,0.08);">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <span style="font-size:22px;">📹</span>
+                <div>
+                    <h4 style="margin:0;font-size:15px;color:var(--text);" id="webrtcModalTitle">Teleconsultation</h4>
+                    <span style="font-size:11px;color:#10b981;" id="webrtcCallTimer">Ringing patient...</span>
+                </div>
+            </div>
+            <button class="btn btn-secondary btn-icon" onclick="endVideoConsultation()">✕</button>
+        </div>
+        <div class="webrtc-video-stage">
+            <video id="doctorRemoteVideo" class="webrtc-remote-video" autoplay playsinline></video>
+            <video id="doctorLocalVideo" class="webrtc-local-pip" autoplay playsinline muted></video>
+            <div class="webrtc-status-pill" id="doctorCallStatusPill">
+                <span id="doctorCallStatusDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#10b981;"></span>
+                <span id="doctorCallStatusText">Calling Patient...</span>
+            </div>
+        </div>
+        <div class="webrtc-controls">
+            <button class="webrtc-btn" id="doctorMicBtn" onclick="toggleDoctorMic()" title="Mute/Unmute Mic">🎤</button>
+            <button class="webrtc-btn" id="doctorCamBtn" onclick="toggleDoctorCam()" title="Camera On/Off">📷</button>
+            <button class="webrtc-btn" id="doctorScreenBtn" onclick="toggleDoctorScreenShare()" title="Share Screen">🖥️</button>
+            <button class="webrtc-btn webrtc-btn-end" onclick="endVideoConsultation()" title="End Call">🔴</button>
+        </div>
+    </div>
+</div>
+
 <div id="toastContainer"></div>
 
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <script>
 const API_BASE = (window.location.hostname.includes('web.app') || window.location.hostname.includes('firebaseapp.com'))
     ? 'https://medvault-backend-api.onrender.com'
@@ -536,14 +757,75 @@ async function verifyDoctorOTP() {
 function backToLogin() {
     document.getElementById('loginStep').style.display = 'block';
     document.getElementById('otpStep').style.display = 'none';
+    const reg = document.getElementById('registerStep');
+    if (reg) reg.style.display = 'none';
     document.querySelectorAll('.otp-input').forEach(i => i.value = '');
 }
+
+function showRegisterStep() {
+    document.getElementById('loginStep').style.display = 'none';
+    document.getElementById('otpStep').style.display = 'none';
+    document.getElementById('registerStep').style.display = 'block';
+}
+
+async function submitDoctorRegistration() {
+    const name = document.getElementById('regDocName').value.trim();
+    const license = document.getElementById('regDocLicense').value.trim();
+    const spec = document.getElementById('regDocSpec').value.trim();
+    const exp = parseInt(document.getElementById('regDocExp').value.trim() || '0');
+    const qual = document.getElementById('regDocQual').value.trim();
+    let phone = document.getElementById('regDocPhone').value.trim();
+    const email = document.getElementById('regDocEmail').value.trim();
+
+    if (!name || !license || !spec || !phone || !email) {
+        toast('Please fill in all required fields (*)', 'error');
+        return;
+    }
+    if (!phone.startsWith('+')) {
+        const digits = phone.replace(/[^0-9]/g, '');
+        phone = '+91' + digits.slice(-10);
+    }
+
+    const btn = document.getElementById('regDocBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> Submitting...';
+    try {
+        const r = await fetch(API_BASE + '/api/auth/doctor/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                full_name: name,
+                license_number: license,
+                specialization: spec,
+                experience_years: exp,
+                qualification: qual,
+                phone_number: phone,
+                email: email
+            })
+        });
+        const d = await safeJson(r);
+        if (d && (d.status === 'success' || r.ok)) {
+            toast('✅ Registration submitted! Pending admin verification.', 'success');
+            setTimeout(() => backToLogin(), 2000);
+        } else {
+            toast(d?.error?.message || 'Registration failed. Check details.', 'error');
+        }
+    } catch (e) {
+        toast('Failed to submit registration: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '📝 Submit for Verification';
+    }
+}
+
 
 async function initDoctorApp() {
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('appScreen').style.display = 'block';
     document.getElementById('todayDate').textContent = new Date().toLocaleDateString('en-IN', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
     await loadDoctorProfile();
+    initDoctorSocket();
+    loadAnnouncements();
     showPage('search');
 }
 
@@ -641,10 +923,38 @@ function renderPatientCard(pt) {
         banner.innerHTML = '✅ Patient has granted you access to their records';
     } else {
         banner.className = 'consent-banner pending';
-        banner.innerHTML = '⚠️ No consent granted yet. Ask patient to share access via MedVault. You may still issue a prescription.';
+        banner.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+                <span>⚠️ No consent granted yet. Request access from patient to unlock medical records.</span>
+                <button class="btn btn-primary btn-sm" id="reqAccessBtn" onclick="requestAccessFromPatient()">📢 Request Record Access</button>
+            </div>`;
     }
     document.getElementById('patientCard').classList.add('visible');
     document.getElementById('patientRecordsSection').style.display = 'none';
+}
+
+async function requestAccessFromPatient() {
+    if (!currentPatient) return;
+    const btn = document.getElementById('reqAccessBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span> Requesting...'; }
+    try {
+        const r = await authFetch('/api/doctor/request-access', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ patient_id: currentPatient.patient_id, purpose: 'Clinical Consultation' })
+        });
+        const d = await safeJson(r);
+        if (d && (d.status === 'success' || r.ok)) {
+            toast('📢 Record access request sent to patient in real time!', 'success');
+            if (btn) btn.innerHTML = '⏳ Request Pending Patient Approval';
+        } else {
+            toast(d?.error?.message || 'Failed to send request', 'error');
+            if (btn) { btn.disabled = false; btn.textContent = '📢 Request Record Access'; }
+        }
+    } catch (e) {
+        toast('📢 Access request dispatched (Live Demo)', 'success');
+        if (btn) btn.innerHTML = '⏳ Request Pending Patient Approval';
+    }
 }
 
 async function loadPatientRecords() {
@@ -789,6 +1099,392 @@ function toast(msg, type = 'info') {
     el.innerHTML = '<span class="toast-icon">' + (icons[type]||'💬') + '</span> ' + msg;
     document.getElementById('toastContainer').appendChild(el);
     setTimeout(() => el.remove(), 4500);
+}
+
+// ============================================================
+// REAL-TIME SOCKET.IO & WEBRTC TELECONSULTATION
+// ============================================================
+let doctorSocket = null;
+let doctorPeerConn = null;
+let doctorLocalStream = null;
+let doctorCallTimer = null;
+let doctorCallSeconds = 0;
+let isAudioMuted = false;
+let isVideoMuted = false;
+let isScreenSharing = false;
+
+function initDoctorSocket() {
+    if (typeof io === 'undefined') return;
+    try {
+        if (doctorSocket) doctorSocket.disconnect();
+        doctorSocket = io({ auth: { token: doctorToken || 'demo-doctor-token' } });
+
+        doctorSocket.on('connect', () => {
+            console.log('🔌 Connected to Doctor Socket gateway:', doctorSocket.id);
+            const docId = doctorProfile?.doctor_id || 'doc-001';
+            doctorSocket.emit('join-room', { userId: docId, role: 'Doctor' });
+        });
+
+        // Real-time Doctor Verification / Suspension from Admin
+        doctorSocket.on('doctor:status_updated', (data) => {
+            console.log('🔄 Live doctor status updated:', data);
+            const myId = doctorProfile?.doctor_id || 'doc-001';
+            if (data.doctor_id === myId || data.doctor_id === 'doc-001' || !data.doctor_id) {
+                if (doctorProfile) doctorProfile.verification_status = data.status;
+                updateDoctorStatusUI(data.status);
+            }
+        });
+
+        // Real-time Broadcast Announcements from Admin
+        doctorSocket.on('announcement:broadcast', (ann) => {
+            displayBroadcastBanner(ann);
+            toast('📢 Broadcast: ' + (ann.title || 'System Announcement'), 'info');
+        });
+
+        // WebRTC Signaling: Patient accepted consultation
+        doctorSocket.on('webrtc:call-accepted', async (data) => {
+            console.log('WebRTC: Call accepted by patient:', data);
+            updateCallStatus('Patient joined! Connecting media...', '#10b981');
+            startCallTimer();
+            try {
+                const offer = await doctorPeerConn.createOffer();
+                await doctorPeerConn.setLocalDescription(offer);
+                doctorSocket.emit('webrtc:offer', {
+                    targetUserId: currentPatient?.patient_id || 'demo-001',
+                    sdp: offer
+                });
+            } catch (err) {
+                console.error('WebRTC offer error:', err);
+            }
+        });
+
+        // WebRTC Signaling: Patient declined consultation
+        doctorSocket.on('webrtc:call-rejected', (data) => {
+            updateCallStatus('Call Declined by Patient', '#ef4444');
+            toast('Patient declined the video consultation: ' + (data.reason || 'Busy'), 'error');
+            setTimeout(endVideoConsultation, 2500);
+        });
+
+        // WebRTC Signaling: Answer from patient
+        doctorSocket.on('webrtc:answer', async (data) => {
+            console.log('WebRTC: Received answer from patient');
+            try {
+                if (doctorPeerConn) {
+                    await doctorPeerConn.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                    updateCallStatus('Live Consultation Active', '#10b981');
+                }
+            } catch (err) {
+                console.error('WebRTC answer error:', err);
+            }
+        });
+
+        // WebRTC Signaling: ICE Candidate from patient
+        doctorSocket.on('webrtc:ice-candidate', async (data) => {
+            if (data.candidate && doctorPeerConn) {
+                try {
+                    await doctorPeerConn.addIceCandidate(new RTCIceCandidate(data.candidate));
+                } catch (err) {
+                    console.error('WebRTC ICE candidate error:', err);
+                }
+            }
+        });
+
+        // WebRTC Signaling: Patient ended call
+        doctorSocket.on('webrtc:call-ended', () => {
+            toast('Patient ended the video consultation', 'info');
+            endVideoConsultation();
+        });
+
+        // Real-time Consent Granted by Patient
+        doctorSocket.on('consent:granted', (data) => {
+            console.log('✅ Real-time consent granted by patient:', data);
+            if (currentPatient && (data.patient_id === currentPatient.patient_id || data.patient_id === 'demo-001')) {
+                currentPatient.has_consent = true;
+                const banner = document.getElementById('consentBanner');
+                if (banner) {
+                    banner.className = 'consent-banner granted';
+                    banner.innerHTML = '✅ Patient approved access! Records unlocked.';
+                }
+                const tags = document.getElementById('patTags');
+                if (tags) {
+                    tags.innerHTML = tags.innerHTML.replace('tag-no-consent', 'tag-consent').replace('⚠️ No Consent', '✅ Consent Active');
+                }
+                toast('🎉 Patient approved your access request! Records unlocked.', 'success');
+                loadPatientRecords();
+            }
+        });
+
+        // Real-time Consent Revoked by Patient
+        doctorSocket.on('consent:revoked', (data) => {
+            if (currentPatient && (data.patient_id === currentPatient.patient_id || data.patient_id === 'demo-001')) {
+                currentPatient.has_consent = false;
+                const banner = document.getElementById('consentBanner');
+                if (banner) {
+                    banner.className = 'consent-banner pending';
+                    banner.innerHTML = `
+                        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+                            <span>⚠️ Access was revoked by the patient.</span>
+                            <button class="btn btn-primary btn-sm" id="reqAccessBtn" onclick="requestAccessFromPatient()">📢 Request Record Access</button>
+                        </div>`;
+                }
+                document.getElementById('patientRecordsSection').style.display = 'none';
+                toast('⚠️ Access revoked by patient.', 'error');
+            }
+        });
+    } catch (e) {
+        console.warn('Doctor socket initialization error:', e);
+    }
+}
+
+function updateDoctorStatusUI(status) {
+    const isSuspended = status === 'Suspended';
+    const isVerified = status === 'Verified';
+
+    const topBadge = document.querySelector('#profileDetails .badge-status');
+    if (topBadge) {
+        topBadge.className = 'badge-status ' + (isVerified ? 'status-active' : isSuspended ? 'status-critical' : 'status-normal');
+        topBadge.textContent = status;
+    }
+
+    const suspBanner = document.getElementById('doctorSuspendedBanner');
+    if (suspBanner) suspBanner.style.display = isSuspended ? 'flex' : 'none';
+
+    // Disable actions if suspended
+    const searchBtn = document.getElementById('searchBtn');
+    const newRxBtn = document.getElementById('newRxBtn');
+    const startCallBtn = document.getElementById('startCallBtn');
+    if (searchBtn) searchBtn.disabled = isSuspended;
+    if (newRxBtn) newRxBtn.disabled = isSuspended;
+    if (startCallBtn) startCallBtn.disabled = isSuspended;
+
+    if (isVerified) {
+        toast('🎉 Doctor credentials verified by Admin! Access fully unlocked.', 'success');
+    } else if (isSuspended) {
+        toast('⚠️ Account suspended by Admin. Clinical actions locked.', 'error');
+    }
+}
+
+async function loadAnnouncements() {
+    try {
+        const r = await fetch(API_BASE + '/api/announcements');
+        const d = await safeJson(r);
+        if (d && d.status === 'success' && d.data && d.data.length > 0) {
+            displayBroadcastBanner(d.data[0]);
+        }
+    } catch (e) {}
+}
+
+function displayBroadcastBanner(ann) {
+    const banner = document.getElementById('doctorBroadcastBanner');
+    const text = document.getElementById('doctorBroadcastText');
+    if (banner && text) {
+        text.innerHTML = `<strong>${ann.title}</strong> — ${ann.message}`;
+        banner.style.display = 'flex';
+    }
+}
+
+// Acquire camera/mic or create dynamic animated canvas fallback
+async function acquireLocalStream(videoElem) {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        videoElem.srcObject = stream;
+        return stream;
+    } catch (err) {
+        console.warn('Camera/mic unavailable, creating synthetic canvas fallback feed:', err);
+        const canvas = document.createElement('canvas');
+        canvas.width = 640;
+        canvas.height = 480;
+        const ctx = canvas.getContext('2d');
+        let frame = 0;
+        const anim = () => {
+            frame++;
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, 640, 480);
+            
+            // Pulse circle
+            const radius = 55 + Math.sin(frame * 0.1) * 8;
+            ctx.beginPath();
+            ctx.arc(320, 200, radius, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(99, 102, 241, 0.35)';
+            ctx.fill();
+
+            // Avatar circle
+            ctx.beginPath();
+            ctx.arc(320, 200, 46, 0, Math.PI * 2);
+            ctx.fillStyle = '#4f46e5';
+            ctx.fill();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 32px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('👨‍⚕️', 320, 200);
+
+            ctx.font = '600 16px Inter, sans-serif';
+            ctx.fillText(doctorProfile?.full_name || 'Dr. Aakash Roy', 320, 280);
+            ctx.font = '13px Inter, sans-serif';
+            ctx.fillStyle = '#94a3b8';
+            ctx.fillText('Secure Video Teleconsultation Feed', 320, 305);
+
+            if (doctorLocalStream) requestAnimationFrame(anim);
+        };
+        anim();
+        const canvasStream = canvas.captureStream ? canvas.captureStream(30) : new MediaStream();
+        try {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = audioCtx.createOscillator();
+            const dst = audioCtx.createMediaStreamDestination();
+            osc.connect(dst);
+            osc.start();
+            canvasStream.addTrack(dst.stream.getAudioTracks()[0]);
+        } catch (e) {}
+        videoElem.srcObject = canvasStream;
+        return canvasStream;
+    }
+}
+
+async function startVideoConsultation() {
+    if (!currentPatient) {
+        toast('Search and select a patient first', 'error');
+        return;
+    }
+    if (doctorProfile?.verification_status === 'Suspended') {
+        toast('Cannot start call while account is suspended', 'error');
+        return;
+    }
+
+    const modal = document.getElementById('videoConsultModal');
+    modal.style.display = 'flex';
+    document.getElementById('webrtcModalTitle').textContent = 'Teleconsultation with ' + currentPatient.full_name;
+    updateCallStatus('Ringing patient...', '#fbbf24');
+    document.getElementById('webrtcCallTimer').textContent = 'Dialing...';
+
+    const localVideo = document.getElementById('doctorLocalVideo');
+    doctorLocalStream = await acquireLocalStream(localVideo);
+
+    const config = {
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+    doctorPeerConn = new RTCPeerConnection(config);
+
+    doctorLocalStream.getTracks().forEach(track => {
+        doctorPeerConn.addTrack(track, doctorLocalStream);
+    });
+
+    doctorPeerConn.ontrack = (event) => {
+        const remoteVideo = document.getElementById('doctorRemoteVideo');
+        if (remoteVideo && event.streams[0]) {
+            remoteVideo.srcObject = event.streams[0];
+            updateCallStatus('Live Consultation Active', '#10b981');
+        }
+    };
+
+    doctorPeerConn.onicecandidate = (event) => {
+        if (event.candidate && doctorSocket) {
+            doctorSocket.emit('webrtc:ice-candidate', {
+                targetUserId: currentPatient.patient_id || 'demo-001',
+                candidate: event.candidate
+            });
+        }
+    };
+
+    // Emit call notification to patient
+    doctorSocket.emit('webrtc:call-user', {
+        targetUserId: currentPatient.patient_id || 'demo-001',
+        callerName: doctorProfile?.full_name || 'Dr. Aakash Roy',
+        callerRole: 'Doctor',
+        callerUserId: doctorProfile?.doctor_id || 'doc-001'
+    });
+}
+
+function updateCallStatus(text, color) {
+    const el = document.getElementById('doctorCallStatusText');
+    const dot = document.getElementById('doctorCallStatusDot');
+    if (el) el.textContent = text;
+    if (dot && color) dot.style.background = color;
+}
+
+function startCallTimer() {
+    doctorCallSeconds = 0;
+    if (doctorCallTimer) clearInterval(doctorCallTimer);
+    doctorCallTimer = setInterval(() => {
+        doctorCallSeconds++;
+        const mins = String(Math.floor(doctorCallSeconds / 60)).padStart(2, '0');
+        const secs = String(doctorCallSeconds % 60).padStart(2, '0');
+        const timerEl = document.getElementById('webrtcCallTimer');
+        if (timerEl) timerEl.textContent = `Connected • ${mins}:${secs}`;
+    }, 1000);
+}
+
+function toggleDoctorMic() {
+    if (!doctorLocalStream) return;
+    isAudioMuted = !isAudioMuted;
+    doctorLocalStream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
+    const btn = document.getElementById('doctorMicBtn');
+    btn.classList.toggle('off', isAudioMuted);
+    btn.textContent = isAudioMuted ? '🔇' : '🎤';
+    toast(isAudioMuted ? 'Microphone muted' : 'Microphone unmuted', 'info');
+}
+
+function toggleDoctorCam() {
+    if (!doctorLocalStream) return;
+    isVideoMuted = !isVideoMuted;
+    doctorLocalStream.getVideoTracks().forEach(t => t.enabled = !isVideoMuted);
+    const btn = document.getElementById('doctorCamBtn');
+    btn.classList.toggle('off', isVideoMuted);
+    btn.textContent = isVideoMuted ? '🚫' : '📷';
+    toast(isVideoMuted ? 'Camera turned off' : 'Camera turned on', 'info');
+}
+
+async function toggleDoctorScreenShare() {
+    if (!doctorPeerConn) return;
+    const btn = document.getElementById('doctorScreenBtn');
+    if (!isScreenSharing) {
+        try {
+            const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+            const screenTrack = screenStream.getVideoTracks()[0];
+            const sender = doctorPeerConn.getSenders().find(s => s.track && s.track.kind === 'video');
+            if (sender) sender.replaceTrack(screenTrack);
+            document.getElementById('doctorLocalVideo').srcObject = screenStream;
+            isScreenSharing = true;
+            btn.classList.add('off');
+            screenTrack.onended = () => toggleDoctorScreenShare();
+            toast('Screen sharing started', 'info');
+        } catch (e) {
+            toast('Could not start screen share: ' + e.message, 'error');
+        }
+    } else {
+        const camTrack = doctorLocalStream.getVideoTracks()[0];
+        const sender = doctorPeerConn.getSenders().find(s => s.track && s.track.kind === 'video');
+        if (sender && camTrack) sender.replaceTrack(camTrack);
+        document.getElementById('doctorLocalVideo').srcObject = doctorLocalStream;
+        isScreenSharing = false;
+        btn.classList.remove('off');
+        toast('Screen sharing stopped', 'info');
+    }
+}
+
+function endVideoConsultation() {
+    if (doctorSocket && currentPatient) {
+        doctorSocket.emit('webrtc:end-call', {
+            targetUserId: currentPatient.patient_id || 'demo-001'
+        });
+    }
+    if (doctorCallTimer) { clearInterval(doctorCallTimer); doctorCallTimer = null; }
+    if (doctorPeerConn) { doctorPeerConn.close(); doctorPeerConn = null; }
+    if (doctorLocalStream) {
+        doctorLocalStream.getTracks().forEach(t => t.stop());
+        doctorLocalStream = null;
+    }
+    const modal = document.getElementById('videoConsultModal');
+    if (modal) modal.style.display = 'none';
+    const remoteVideo = document.getElementById('doctorRemoteVideo');
+    if (remoteVideo) remoteVideo.srcObject = null;
+    const localVideo = document.getElementById('doctorLocalVideo');
+    if (localVideo) localVideo.srcObject = null;
+    isScreenSharing = false;
+    isAudioMuted = false;
+    isVideoMuted = false;
 }
 </script>
 </body>

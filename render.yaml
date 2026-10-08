@@ -72,6 +72,10 @@ services:
       - key: GEMINI_API_KEY
         value: REPLACE_WITH_GEMINI_API_KEY
 
+      # ── Groq AI ───────────────────────────────────────────────
+      - key: Groq_API_KEY
+        sync: false
+
       # ── Google OAuth ──────────────────────────────────────────
       - key: GOOGLE_FIT_CLIENT_ID
         value: REPLACE_WITH_GOOGLE_CLIENT_ID

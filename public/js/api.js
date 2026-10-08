@@ -143,6 +143,8 @@ const API = {
         register: (data) => api.post('/auth/register', data),
         sendOTP: (healthId, phone) => api.post('/auth/send-otp', { health_id: healthId, phone_number: phone }),
         verifyOTP: (healthId, phone, otp) => api.post('/auth/verify-otp', { health_id: healthId, phone_number: phone, otp }),
+        getFirebaseConfig: () => api.get('/auth/firebase-config'),
+        firebaseLogin: (healthId, idToken) => api.post('/auth/firebase-login', { health_id: healthId, id_token: idToken }),
         demoLogin: () => api.post('/auth/demo-login'),
         logout: () => api.post('/auth/logout')
     },
@@ -168,7 +170,24 @@ const API = {
             a.click();
             a.remove();
             setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
-        }
+        },
+        exportData: async () => {
+            const token = localStorage.getItem('authToken');
+            const resp = await fetch(`${API_BASE_URL}/patient/export-data`, {
+                headers: token ? { Authorization: `Bearer ${token}` } : {}
+            });
+            if (!resp.ok) throw new Error("Failed to export health data");
+            const blob = await resp.blob();
+            const blobUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = blobUrl;
+            a.download = `MedVault-Health-Data-Export.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
+        },
+        deleteAccount: () => api.delete('/patient/account')
     },
 
     // Medical Records
@@ -214,9 +233,10 @@ const API = {
         revoke: (id) => api.delete(`/consent/${id}`)
     },
 
-    // Gemini AI Health Assistant
+    // Gemini / Groq / Clinical AI Health Assistant
     assistant: {
-        ask: (message, vitalsContext = null) => api.post('/assistant', { message, vitalsContext })
+        ask: (message, vitalsContext = null) => api.post('/assistant', { message, vitalsContext }),
+        chat: (message, vitalsContext = null) => api.post('/assistant/chat', { message, vitalsContext })
     },
 
     // Vital Signs & Smartwatch AI
@@ -225,6 +245,25 @@ const API = {
         getLatest: () => api.get('/vitals/latest'),
         log: (data) => api.post('/vitals', data),
         analyzeAI: (vitals = []) => api.post('/vitals/ai-analyze', { vitals })
+    },
+
+    // Insurance & Claims
+    insurance: {
+        getAll: () => api.get('/patient/insurance'),
+        add: (data) => api.post('/patient/insurance', data),
+        getClaims: () => api.get('/patient/insurance/claims'),
+        fileClaim: (data) => api.post('/patient/insurance/claims', data)
+    },
+
+    // Vaccinations & Immunizations
+    vaccinations: {
+        getAll: () => api.get('/patient/vaccinations'),
+        record: (data) => api.post('/patient/vaccinations', data)
+    },
+
+    // Lab Results & Biomarkers
+    labResults: {
+        getAll: () => api.get('/patient/lab-results')
     },
 
     // Hospitals & Doctors
