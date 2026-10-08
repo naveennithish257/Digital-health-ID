@@ -1038,6 +1038,7 @@ async function resolvePatientContext(req, res, next) {
         return next();
     }
     if (!req.user || req.user.userType !== "Patient") return next();
+    req.patientId = req.user.userId;
     try {
         const [pts] = await pool.query(
             "SELECT * FROM patients WHERE patient_id=?",
@@ -1049,6 +1050,14 @@ async function resolvePatientContext(req, res, next) {
             req.healthId = pts[0].health_id;
         }
     } catch (e) { /* pass through */ }
+    if (!req.patient) {
+        const memPt = patientMemoryStore.get(req.user.userId) || (req.healthId && patientMemoryStore.get(req.healthId));
+        if (memPt) {
+            req.patient = memPt;
+            req.patientId = memPt.patient_id;
+            req.healthId = memPt.health_id;
+        }
+    }
     next();
 }
 
@@ -1087,6 +1096,13 @@ function normalizeHealthId(raw) {
 
 const patientMemoryStore = new Map();
 const authMemoryStore = new Map();
+const recordsMemoryStore = new Map();
+const prescriptionsMemoryStore = new Map();
+const appointmentsMemoryStore = new Map();
+const insuranceMemoryStore = new Map();
+const claimsMemoryStore = new Map();
+const vaccinationsMemoryStore = new Map();
+const vitalsMemoryStore = new Map();
 
 // Initialize with known default demo & test patients
 const DEFAULT_DEMO_PATIENT = {
@@ -1099,21 +1115,10 @@ const DEFAULT_DEMO_PATIENT = {
     phone_number: "+91 98765 43210",
     email: "patient@medvault.health"
 };
-const DEFAULT_REAL_PATIENT = {
-    patient_id: "PAT001",
-    health_id: "HID-2026-12345",
-    full_name: "Rahul Sharma",
-    blood_group: "B+",
-    gender: "Male",
-    date_of_birth: "1988-06-20",
-    phone_number: "+91 98765 43210",
-    email: "naveennithish257@gmail.com"
-};
 
 patientMemoryStore.set("HID-2026-99999", DEFAULT_DEMO_PATIENT);
+patientMemoryStore.set("demo-001", DEFAULT_DEMO_PATIENT);
 patientMemoryStore.set("patient@medvault.health", DEFAULT_DEMO_PATIENT);
-patientMemoryStore.set("HID-2026-12345", DEFAULT_REAL_PATIENT);
-patientMemoryStore.set("naveennithish257@gmail.com", DEFAULT_REAL_PATIENT);
 
 // ============================================================
 // HEALTH CHECK (Kubernetes Liveness & Readiness Probes)
@@ -1185,6 +1190,32 @@ app.post("/api/auth/register", [
         );
         await conn.commit();
 
+        const newPatient = {
+            patient_id: patientId,
+            health_id: healthId,
+            full_name,
+            date_of_birth,
+            gender,
+            blood_group,
+            phone_number,
+            email: email || null,
+            address: address || null,
+            city: city || null,
+            state: state || null,
+            pincode: pincode || null,
+            allergies: allergies || null,
+            chronic_conditions: chronic_conditions || null,
+            emergency_contact_name: emergency_contact_name || null,
+            emergency_contact_phone: emergency_contact_phone || null,
+            emergency_contact_relation: emergency_contact_relation || null,
+            created_at: new Date().toISOString()
+        };
+        patientMemoryStore.set(patientId, newPatient);
+        patientMemoryStore.set(healthId, newPatient);
+        if (email) patientMemoryStore.set(email.toLowerCase(), newPatient);
+        authMemoryStore.set(patientId, { otp, exp: otpExpiry, attempts: 0 });
+        authMemoryStore.set(healthId, { otp, exp: otpExpiry, attempts: 0 });
+
         if (email) {
             await sendOTPEmail(email, otp, full_name);
         }
@@ -1197,12 +1228,46 @@ app.post("/api/auth/register", [
     } catch (e) {
         if (conn) await conn.rollback();
         console.error("Register error:", e.message);
-        // Fallback for demo when MySQL offline
+        // Fallback store when MySQL offline
+        const fallbackPatientId = "PAT-" + crypto.randomUUID().slice(0, 8);
         const mockHealthId = `HID-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
+        const fallbackPatient = {
+            patient_id: fallbackPatientId,
+            health_id: mockHealthId,
+            full_name: req.body.full_name || "Patient",
+            date_of_birth: req.body.date_of_birth || null,
+            gender: req.body.gender || "Other",
+            blood_group: req.body.blood_group || "O+",
+            phone_number: req.body.phone_number || "",
+            email: req.body.email || null,
+            address: req.body.address || null,
+            city: req.body.city || null,
+            state: req.body.state || null,
+            pincode: req.body.pincode || null,
+            allergies: req.body.allergies || null,
+            chronic_conditions: req.body.chronic_conditions || null,
+            emergency_contact_name: req.body.emergency_contact_name || null,
+            emergency_contact_phone: req.body.emergency_contact_phone || null,
+            emergency_contact_relation: req.body.emergency_contact_relation || null,
+            created_at: new Date().toISOString()
+        };
+        patientMemoryStore.set(fallbackPatientId, fallbackPatient);
+        patientMemoryStore.set(mockHealthId, fallbackPatient);
+        if (req.body.email) patientMemoryStore.set(req.body.email.toLowerCase(), fallbackPatient);
+
+        const fallbackOtp = generateOTP();
+        const fallbackExp = new Date(Date.now() + 10 * 60 * 1000);
+        authMemoryStore.set(fallbackPatientId, { otp: fallbackOtp, exp: fallbackExp, attempts: 0 });
+        authMemoryStore.set(mockHealthId, { otp: fallbackOtp, exp: fallbackExp, attempts: 0 });
+
+        if (req.body.email) {
+            sendOTPEmail(req.body.email, fallbackOtp, req.body.full_name || "Patient").catch(() => {});
+        }
+
         res.status(201).json({
             status: "success",
-            message: "Registration successful (Demo Mode). OTP: 123456",
-            data: { patient_id: "demo-new", health_id: mockHealthId, otp_expiry: new Date(Date.now() + 600000) }
+            message: req.body.email ? `Registration successful. OTP sent to ${req.body.email}.` : "Registration successful.",
+            data: { patient_id: fallbackPatientId, health_id: mockHealthId, otp_expiry: fallbackExp, otp: process.env.NODE_ENV !== "production" ? fallbackOtp : undefined }
         });
     } finally {
         if (conn) conn.release();
@@ -1867,19 +1932,32 @@ async function getPatientProfileHandler(req, res) {
     try {
         if (req.user?.isDemo) return res.json({ status:"success", data: DEMO_PATIENT });
         const healthId = req.params.health_id || req.healthId;
-        const [pts] = await pool.query(
-            `SELECT patient_id,health_id,full_name,date_of_birth,TIMESTAMPDIFF(YEAR,date_of_birth,CURDATE()) as age,
-                    gender,blood_group,phone_number,email,CONCAT_WS(', ',address,city,state,pincode) as full_address,
-                    address,city,state,pincode,allergies,chronic_conditions,emergency_contact_name,
-                    emergency_contact_phone,emergency_contact_relation,profile_photo_url,created_at 
-             FROM patients WHERE (health_id=? OR patient_id=?) AND is_active=TRUE`,
-            [healthId, req.user.userId]
-        );
-        if (!pts.length) return res.json({ status:"success", data: DEMO_PATIENT });
-        await logAccess(pts[0].patient_id, req.user.userId, req.user.userType, "View", "PatientProfile", pts[0].patient_id, req.ip);
-        res.json({ status:"success", data: pts[0] });
+        const targetId = req.user?.userId;
+        let pt = null;
+        try {
+            const [pts] = await pool.query(
+                `SELECT patient_id,health_id,full_name,date_of_birth,TIMESTAMPDIFF(YEAR,date_of_birth,CURDATE()) as age,
+                        gender,blood_group,phone_number,email,CONCAT_WS(', ',address,city,state,pincode) as full_address,
+                        address,city,state,pincode,allergies,chronic_conditions,emergency_contact_name,
+                        emergency_contact_phone,emergency_contact_relation,profile_photo_url,created_at 
+                 FROM patients WHERE (health_id=? OR patient_id=?) AND is_active=TRUE`,
+                [healthId, targetId]
+            );
+            if (pts.length) pt = pts[0];
+        } catch (_) {}
+
+        if (!pt) {
+            pt = (healthId && patientMemoryStore.get(healthId)) || (targetId && patientMemoryStore.get(targetId)) || req.patient;
+        }
+
+        if (!pt) {
+            return res.status(404).json({ status:"error", error:{ code:"NOT_FOUND", message:"Patient profile not found" } });
+        }
+
+        await logAccess(pt.patient_id, req.user.userId, req.user.userType, "View", "PatientProfile", pt.patient_id, req.ip).catch(() => {});
+        res.json({ status:"success", data: pt });
     } catch (e) {
-        res.json({ status:"success", data: DEMO_PATIENT });
+        res.status(500).json({ status:"error", error:{ code:"INTERNAL_ERROR", message: e.message } });
     }
 }
 
@@ -1928,14 +2006,23 @@ app.put("/api/patient/profile", authenticateToken, resolvePatientContext, async 
             if (updated.length) pt = updated[0];
         } catch (dbErr) {
             console.warn("[Update Profile] DB offline, using memory state:", dbErr.message);
-            pt = { ...(DEMO_PATIENT || {}), ...req.body, patient_id: patientId };
+            const existing = patientMemoryStore.get(patientId) || (req.user?.isDemo ? DEMO_PATIENT : {});
+            pt = { ...existing, ...req.body, patient_id: patientId };
         }
+
+        // Always sync updated data to patientMemoryStore
+        const currentMem = patientMemoryStore.get(patientId) || {};
+        const merged = { ...currentMem, ...pt, patient_id: patientId };
+        patientMemoryStore.set(patientId, merged);
+        if (merged.health_id) patientMemoryStore.set(merged.health_id, merged);
+        if (merged.email) patientMemoryStore.set(merged.email.toLowerCase(), merged);
+
         await logAccess(patientId, req.user.userId, req.user.userType, "Update", "PatientProfile", patientId, req.ip).catch(() => {});
 
         res.json({
             status: "success",
             message: "Profile updated successfully",
-            data: pt
+            data: merged
         });
     } catch (e) {
         console.error("[Update Profile] Error:", e.message);
@@ -2216,32 +2303,68 @@ async function getPatientDashboardHandler(req, res) {
             });
         }
         const healthId = req.params.health_id || req.healthId;
-        const [pts] = await pool.query("SELECT * FROM patients WHERE (health_id=? OR patient_id=?)", [healthId, req.user.userId]);
-        if (!pts.length) return res.json({ status:"success", data:{ patient_info: DEMO_PATIENT, statistics: { total_records: 0, active_prescriptions: 0, upcoming_appointments: 0 } } });
-        const pt = pts[0];
+        const targetId = req.user?.userId;
+        let pt = null;
+        try {
+            const [pts] = await pool.query("SELECT * FROM patients WHERE (health_id=? OR patient_id=?)", [healthId, targetId]);
+            if (pts.length) pt = pts[0];
+        } catch (_) {}
 
-        const [[stats]] = await pool.query(
-            `SELECT (SELECT COUNT(*) FROM medical_records WHERE patient_id=?) as total_records,
-                    (SELECT COUNT(*) FROM prescriptions WHERE patient_id=? AND prescription_status='Active') as active_prescriptions,
-                    (SELECT COUNT(*) FROM appointments WHERE patient_id=? AND status IN ('Scheduled','Confirmed') AND appointment_date>=CURDATE()) as upcoming_appointments`,
-            [pt.patient_id, pt.patient_id, pt.patient_id]
-        );
-        const [upcoming] = await pool.query(
-            `SELECT a.appointment_id,d.full_name as doctor_name,d.specialization,a.appointment_date,a.appointment_time,h.hospital_name,a.status 
-             FROM appointments a JOIN doctors d ON a.doctor_id=d.doctor_id LEFT JOIN hospitals h ON a.hospital_id=h.hospital_id 
-             WHERE a.patient_id=? AND a.appointment_date>=CURDATE() ORDER BY a.appointment_date LIMIT 5`,
-            [pt.patient_id]
-        );
-        const [qrStatus] = await pool.query(
-            "SELECT qr_id,status,expires_at,use_count FROM emergency_qr_codes WHERE patient_id=? AND status='Active' ORDER BY created_at DESC LIMIT 1",
-            [pt.patient_id]
-        );
+        if (!pt) {
+            pt = (healthId && patientMemoryStore.get(healthId)) || (targetId && patientMemoryStore.get(targetId)) || req.patient;
+        }
+
+        if (!pt) {
+            return res.status(404).json({ status:"error", error:{ code:"NOT_FOUND", message:"Patient not found" } });
+        }
+
+        let totalRecords = (recordsMemoryStore.get(pt.patient_id) || []).length;
+        let activePrescriptions = (prescriptionsMemoryStore.get(pt.patient_id) || []).length;
+        let upcomingAppointments = (appointmentsMemoryStore.get(pt.patient_id) || []).length;
+        let upcomingList = appointmentsMemoryStore.get(pt.patient_id) || [];
+        let qrStatus = null;
+
+        try {
+            const [[stats]] = await pool.query(
+                `SELECT (SELECT COUNT(*) FROM medical_records WHERE patient_id=?) as total_records,
+                        (SELECT COUNT(*) FROM prescriptions WHERE patient_id=? AND prescription_status='Active') as active_prescriptions,
+                        (SELECT COUNT(*) FROM appointments WHERE patient_id=? AND status IN ('Scheduled','Confirmed') AND appointment_date>=CURDATE()) as upcoming_appointments`,
+                [pt.patient_id, pt.patient_id, pt.patient_id]
+            );
+            if (stats) {
+                totalRecords = Number(stats.total_records || 0) + (recordsMemoryStore.get(pt.patient_id) || []).length;
+                activePrescriptions = Number(stats.active_prescriptions || 0) + (prescriptionsMemoryStore.get(pt.patient_id) || []).length;
+                upcomingAppointments = Number(stats.upcoming_appointments || 0) + (appointmentsMemoryStore.get(pt.patient_id) || []).length;
+            }
+            const [upcoming] = await pool.query(
+                `SELECT a.appointment_id,d.full_name as doctor_name,d.specialization,a.appointment_date,a.appointment_time,h.hospital_name,a.status 
+                 FROM appointments a JOIN doctors d ON a.doctor_id=d.doctor_id LEFT JOIN hospitals h ON a.hospital_id=h.hospital_id 
+                 WHERE a.patient_id=? AND a.appointment_date>=CURDATE() ORDER BY a.appointment_date LIMIT 5`,
+                [pt.patient_id]
+            );
+            if (upcoming && upcoming.length) upcomingList = upcoming;
+            const [qr] = await pool.query(
+                "SELECT qr_id,status,expires_at,use_count FROM emergency_qr_codes WHERE patient_id=? AND status='Active' ORDER BY created_at DESC LIMIT 1",
+                [pt.patient_id]
+            );
+            if (qr && qr.length) qrStatus = qr[0];
+        } catch (_) {}
+
         res.json({
             status: "success",
-            data: { patient_info: pt, statistics: stats, upcoming_appointments: upcoming, active_qr: qrStatus[0]||null }
+            data: {
+                patient_info: pt,
+                statistics: {
+                    total_records: totalRecords,
+                    active_prescriptions: activePrescriptions,
+                    upcoming_appointments: upcomingAppointments
+                },
+                upcoming_appointments: upcomingList,
+                active_qr: qrStatus
+            }
         });
     } catch (e) {
-        res.json({ status:"success", data:{ patient_info: DEMO_PATIENT, statistics: { total_records: 2, active_prescriptions: 1, upcoming_appointments: 1 }, upcoming_appointments: [] } });
+        res.status(500).json({ status:"error", error:{ code:"INTERNAL_ERROR", message: e.message } });
     }
 }
 
@@ -2264,16 +2387,31 @@ async function getRecordsHandler(req, res) {
             });
         }
         const patientId = req.patientId || req.user.userId;
-        const [records] = await pool.query(
-            `SELECT mr.record_id,mr.record_type,mr.record_title as title,mr.record_title,mr.record_date,h.hospital_name as provider,h.hospital_name,
-                    d.full_name as doctor_name,mr.diagnosis,mr.file_url,mr.file_type,mr.file_size_kb,mr.is_critical,mr.created_at 
-             FROM medical_records mr LEFT JOIN hospitals h ON mr.hospital_id=h.hospital_id LEFT JOIN doctors d ON mr.doctor_id=d.doctor_id 
-             WHERE mr.patient_id=? ORDER BY mr.record_date DESC`,
-            [patientId]
-        );
-        res.json({ status: "success", data: records });
+        let dbRecords = [];
+        try {
+            const [records] = await pool.query(
+                `SELECT mr.record_id,mr.record_type,mr.record_title as title,mr.record_title,mr.record_date,h.hospital_name as provider,h.hospital_name,
+                        d.full_name as doctor_name,mr.diagnosis,mr.file_url,mr.file_type,mr.file_size_kb,mr.is_critical,mr.created_at 
+                 FROM medical_records mr LEFT JOIN hospitals h ON mr.hospital_id=h.hospital_id LEFT JOIN doctors d ON mr.doctor_id=d.doctor_id 
+                 WHERE mr.patient_id=? ORDER BY mr.record_date DESC`,
+                [patientId]
+            );
+            dbRecords = records || [];
+        } catch (_) {}
+
+        const memRecords = recordsMemoryStore.get(patientId) || [];
+        const seenIds = new Set();
+        const merged = [];
+        for (const r of [...memRecords, ...dbRecords]) {
+            const id = r.record_id || r.id;
+            if (!seenIds.has(id)) {
+                seenIds.add(id);
+                merged.push(r);
+            }
+        }
+        res.json({ status: "success", data: merged });
     } catch (e) {
-        res.json({ status: "success", data: [] });
+        res.json({ status: "success", data: recordsMemoryStore.get(req.patientId || req.user?.userId) || [] });
     }
 }
 
@@ -2297,6 +2435,31 @@ async function uploadRecordHandler(req, res) {
         const fileSizeKb = req.file ? Math.round(req.file.size / 1024) : null;
 
         const recordId = crypto.randomUUID();
+
+        // Always store in memory cache so user uploads are immediately visible and preserved
+        const memRec = {
+            record_id: recordId,
+            id: recordId,
+            patient_id: patientId,
+            doctor_id: doctor_id || null,
+            hospital_id: hospital_id || null,
+            record_type: actualType,
+            record_title: actualTitle,
+            title: actualTitle,
+            record_date: actualDate,
+            diagnosis: diagnosis || notes || null,
+            file_url: filePubId || fileUrl,
+            file_name: req.file ? req.file.originalname : (actualTitle + ".pdf"),
+            file_type: fileType,
+            file_size_kb: fileSizeKb,
+            provider: req.body.provider || "Self Upload",
+            hospital_name: req.body.hospital_name || req.body.provider || "Self Upload",
+            doctor_name: req.body.doctor_name || null,
+            created_at: new Date().toISOString()
+        };
+        if (!recordsMemoryStore.has(patientId)) recordsMemoryStore.set(patientId, []);
+        recordsMemoryStore.get(patientId).unshift(memRec);
+
         try {
             await pool.query(
                 `INSERT INTO medical_records (record_id,patient_id,doctor_id,hospital_id,record_type,record_title,record_date,diagnosis,file_url,file_type,file_size_kb) 
@@ -2377,9 +2540,10 @@ async function fetchPrescriptions(patientId, isDemo = false) {
             const [meds] = await pool.query("SELECT medicine_name,dosage,frequency,duration,timing,food_instruction FROM prescription_medications WHERE prescription_id=?", [rx.prescription_id]);
             rx.medications = meds;
         }
-        return rxs.length ? rxs : DEMO_PRESCRIPTIONS;
+        const memRxs = prescriptionsMemoryStore.get(patientId) || [];
+        return rxs.length ? rxs : memRxs;
     } catch (e) {
-        return DEMO_PRESCRIPTIONS;
+        return prescriptionsMemoryStore.get(patientId) || [];
     }
 }
 
@@ -2450,16 +2614,29 @@ async function getAppointmentsHandler(req, res) {
             });
         }
         const patientId = req.patientId || req.user.userId;
-        const [appts] = await pool.query(
-            `SELECT a.appointment_id,d.full_name as doctor_name,d.specialization,a.appointment_date,a.appointment_time,
-                    a.appointment_type,h.hospital_name,a.status,a.reason 
-             FROM appointments a JOIN doctors d ON a.doctor_id=d.doctor_id LEFT JOIN hospitals h ON a.hospital_id=h.hospital_id 
-             WHERE a.patient_id=? ORDER BY a.appointment_date DESC`,
-            [patientId]
-        );
-        res.json({ status: "success", data: appts });
+        let dbAppts = [];
+        try {
+            const [appts] = await pool.query(
+                `SELECT a.appointment_id,d.full_name as doctor_name,d.specialization,a.appointment_date,a.appointment_time,
+                        a.appointment_type,h.hospital_name,a.status,a.reason 
+                 FROM appointments a JOIN doctors d ON a.doctor_id=d.doctor_id LEFT JOIN hospitals h ON a.hospital_id=h.hospital_id 
+                 WHERE a.patient_id=? ORDER BY a.appointment_date DESC`,
+                [patientId]
+            );
+            dbAppts = appts || [];
+        } catch (_) {}
+        const memAppts = appointmentsMemoryStore.get(patientId) || [];
+        const seen = new Set();
+        const merged = [];
+        for (const a of [...memAppts, ...dbAppts]) {
+            if (!seen.has(a.appointment_id)) {
+                seen.add(a.appointment_id);
+                merged.push(a);
+            }
+        }
+        res.json({ status: "success", data: merged });
     } catch (e) {
-        res.json({ status: "success", data: [] });
+        res.json({ status: "success", data: appointmentsMemoryStore.get(req.patientId || req.user?.userId) || [] });
     }
 }
 
@@ -2476,14 +2653,28 @@ app.get("/api/appointments/upcoming", authenticateToken, resolvePatientContext, 
     }
     const patientId = req.patientId || req.user.userId;
     try {
-        const [appts] = await pool.query(
-            `SELECT a.appointment_id,d.full_name as doctor_name,d.specialization,a.appointment_date,a.appointment_time,
-                    a.appointment_type,h.hospital_name,a.status,a.reason 
-             FROM appointments a JOIN doctors d ON a.doctor_id=d.doctor_id LEFT JOIN hospitals h ON a.hospital_id=h.hospital_id 
-             WHERE a.patient_id=? AND a.appointment_date>=CURDATE() ORDER BY a.appointment_date ASC LIMIT 5`,
-            [patientId]
-        );
-        res.json({ status: "success", data: appts });
+        let dbAppts = [];
+        try {
+            const [appts] = await pool.query(
+                `SELECT a.appointment_id,d.full_name as doctor_name,d.specialization,a.appointment_date,a.appointment_time,
+                        a.appointment_type,h.hospital_name,a.status,a.reason 
+                 FROM appointments a JOIN doctors d ON a.doctor_id=d.doctor_id LEFT JOIN hospitals h ON a.hospital_id=h.hospital_id 
+                 WHERE a.patient_id=? AND a.appointment_date>=CURDATE() ORDER BY a.appointment_date ASC LIMIT 5`,
+                [patientId]
+            );
+            dbAppts = appts || [];
+        } catch (_) {}
+        const today = new Date().toISOString().split("T")[0];
+        const memAppts = (appointmentsMemoryStore.get(patientId) || []).filter(a => a.appointment_date >= today && a.status !== "Cancelled");
+        const seen = new Set();
+        const merged = [];
+        for (const a of [...memAppts, ...dbAppts]) {
+            if (!seen.has(a.appointment_id)) {
+                seen.add(a.appointment_id);
+                merged.push(a);
+            }
+        }
+        res.json({ status: "success", data: merged });
     } catch (e) {
         res.json({ status: "success", data: [] });
     }
@@ -2498,6 +2689,23 @@ app.post("/api/appointments", authenticateToken, resolvePatientContext, [
         const patientId = req.patientId || req.user.userId;
         const { doctor_id, hospital_id, appointment_date, appointment_time, appointment_type, reason } = req.body;
         const apptId = crypto.randomUUID();
+
+        const newAppt = {
+            appointment_id: apptId,
+            patient_id: patientId,
+            doctor_id,
+            hospital_id: hospital_id || null,
+            appointment_date,
+            appointment_time: appointment_time || "11:00 AM",
+            appointment_type: appointment_type || "Consultation",
+            reason: reason || "Routine Checkup",
+            doctor_name: req.body.doctor_name || "Specialist Clinician",
+            hospital_name: req.body.hospital_name || "Hospital",
+            status: "Scheduled"
+        };
+        if (!appointmentsMemoryStore.has(patientId)) appointmentsMemoryStore.set(patientId, []);
+        appointmentsMemoryStore.get(patientId).unshift(newAppt);
+
         try {
             await pool.query(
                 "INSERT INTO appointments (appointment_id,patient_id,doctor_id,hospital_id,appointment_date,appointment_time,appointment_type,reason) VALUES (?,?,?,?,?,?,?,?)",
@@ -3115,6 +3323,7 @@ const DEMO_CLAIMS = [
 
 app.get("/api/patient/insurance", authenticateToken, resolvePatientContext, async (req, res) => {
     try {
+        if (req.user?.isDemo) return res.json({ status: "success", data: DEMO_INSURANCE });
         const patientId = req.patientId || req.user.userId;
         const [rows] = await pool.query(
             `SELECT pi.*, ip.provider_name, ip.provider_code, ip.phone_number as provider_phone 
@@ -3123,9 +3332,11 @@ app.get("/api/patient/insurance", authenticateToken, resolvePatientContext, asyn
              WHERE pi.patient_id = ? AND pi.is_active = TRUE`,
             [patientId]
         ).catch(() => [[]]);
-        res.json({ status: "success", data: rows.length ? rows : DEMO_INSURANCE });
+        const mem = insuranceMemoryStore.get(patientId) || [];
+        const result = (rows && rows.length) ? rows : mem;
+        res.json({ status: "success", data: result });
     } catch (e) {
-        res.json({ status: "success", data: DEMO_INSURANCE });
+        res.json({ status: "success", data: insuranceMemoryStore.get(req.patientId || req.user?.userId) || [] });
     }
 });
 
@@ -3140,6 +3351,23 @@ app.post("/api/patient/insurance", authenticateToken, resolvePatientContext, [
         const { provider_name, policy_number, policy_holder_name, coverage_amount, policy_start_date, policy_end_date, policy_type } = req.body;
         const insId = "ins-" + Date.now();
         const provId = "prov-" + Date.now();
+
+        const newPolicy = {
+            insurance_id: insId,
+            patient_id: patientId,
+            provider_id: provId,
+            provider_name,
+            policy_number,
+            policy_holder_name: policy_holder_name || "Self",
+            policy_start_date: policy_start_date || "2026-01-01",
+            policy_end_date: policy_end_date || "2026-12-31",
+            coverage_amount: parseFloat(coverage_amount),
+            remaining_amount: parseFloat(coverage_amount),
+            policy_type: policy_type || "Individual",
+            is_active: true
+        };
+        if (!insuranceMemoryStore.has(patientId)) insuranceMemoryStore.set(patientId, []);
+        insuranceMemoryStore.get(patientId).unshift(newPolicy);
         
         await pool.query(
             "INSERT INTO insurance_providers (provider_id, provider_name, provider_code) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE provider_name=VALUES(provider_name)",
@@ -3156,12 +3384,13 @@ app.post("/api/patient/insurance", authenticateToken, resolvePatientContext, [
         trackEvent();
         res.status(201).json({ status: "success", message: "Insurance policy added", data: { insurance_id: insId, policy_number } });
     } catch (e) {
-        res.status(201).json({ status: "success", message: "Insurance policy added (Demo)", data: { insurance_id: "ins-demo-" + Date.now() } });
+        res.status(201).json({ status: "success", message: "Insurance policy added", data: { insurance_id: "ins-" + Date.now(), policy_number: req.body?.policy_number } });
     }
 });
 
 app.get("/api/patient/insurance/claims", authenticateToken, resolvePatientContext, async (req, res) => {
     try {
+        if (req.user?.isDemo) return res.json({ status: "success", data: DEMO_CLAIMS });
         const patientId = req.patientId || req.user.userId;
         const [rows] = await pool.query(
             `SELECT ic.*, h.hospital_name 
@@ -3170,9 +3399,11 @@ app.get("/api/patient/insurance/claims", authenticateToken, resolvePatientContex
              WHERE ic.patient_id = ? ORDER BY ic.claim_date DESC`,
             [patientId]
         ).catch(() => [[]]);
-        res.json({ status: "success", data: rows.length ? rows : DEMO_CLAIMS });
+        const mem = claimsMemoryStore.get(patientId) || [];
+        const result = (rows && rows.length) ? rows : mem;
+        res.json({ status: "success", data: result });
     } catch (e) {
-        res.json({ status: "success", data: DEMO_CLAIMS });
+        res.json({ status: "success", data: claimsMemoryStore.get(req.patientId || req.user?.userId) || [] });
     }
 });
 
@@ -3185,6 +3416,24 @@ app.post("/api/patient/insurance/claims", authenticateToken, resolvePatientConte
         const patientId = req.patientId || req.user.userId;
         const { insurance_id, hospital_id, hospital_name, claim_amount, treatment_date, diagnosis, treatment_details } = req.body;
         const claimId = "clm-" + Date.now();
+
+        const newClaim = {
+            claim_id: claimId,
+            insurance_id: insurance_id || "ins-demo-1",
+            patient_id: patientId,
+            hospital_id: hospital_id || "hosp-1",
+            hospital_name: hospital_name || "Hospital",
+            claim_amount: parseFloat(claim_amount),
+            approved_amount: null,
+            claim_date: new Date().toISOString().split("T")[0],
+            treatment_date: treatment_date || new Date().toISOString().split("T")[0],
+            diagnosis,
+            treatment_details: treatment_details || "Cashless claim request",
+            claim_status: "Submitted"
+        };
+        if (!claimsMemoryStore.has(patientId)) claimsMemoryStore.set(patientId, []);
+        claimsMemoryStore.get(patientId).unshift(newClaim);
+
         await pool.query(
             `INSERT INTO insurance_claims (claim_id, insurance_id, patient_id, hospital_id, claim_amount, approved_amount, claim_date, treatment_date, diagnosis, treatment_details, claim_status)
              VALUES (?, ?, ?, ?, ?, ?, CURDATE(), ?, ?, ?, 'Submitted')`,
@@ -3195,7 +3444,7 @@ app.post("/api/patient/insurance/claims", authenticateToken, resolvePatientConte
         trackEvent();
         res.status(201).json({ status: "success", message: "Insurance claim submitted", data: { claim_id: claimId, claim_status: "Submitted", claim_amount: parseFloat(claim_amount) } });
     } catch (e) {
-        res.status(201).json({ status: "success", message: "Claim submitted (Demo)", data: { claim_id: "clm-demo-" + Date.now(), claim_status: "Submitted", claim_amount: parseFloat(claim_amount || 0) } });
+        res.status(201).json({ status: "success", message: "Claim submitted", data: { claim_id: "clm-" + Date.now(), claim_status: "Submitted", claim_amount: parseFloat(req.body?.claim_amount || 0) } });
     }
 });
 
@@ -3250,6 +3499,7 @@ const DEMO_VACCINATIONS = [
 
 app.get("/api/patient/vaccinations", authenticateToken, resolvePatientContext, async (req, res) => {
     try {
+        if (req.user?.isDemo) return res.json({ status: "success", data: DEMO_VACCINATIONS });
         const patientId = req.patientId || req.user.userId;
         const [rows] = await pool.query(
             `SELECT v.*, h.hospital_name 
@@ -3258,9 +3508,11 @@ app.get("/api/patient/vaccinations", authenticateToken, resolvePatientContext, a
              WHERE v.patient_id = ? ORDER BY v.administered_date DESC`,
             [patientId]
         ).catch(() => [[]]);
-        res.json({ status: "success", data: rows.length ? rows : DEMO_VACCINATIONS });
+        const mem = vaccinationsMemoryStore.get(patientId) || [];
+        const result = (rows && rows.length) ? rows : mem;
+        res.json({ status: "success", data: result });
     } catch (e) {
-        res.json({ status: "success", data: DEMO_VACCINATIONS });
+        res.json({ status: "success", data: vaccinationsMemoryStore.get(req.patientId || req.user?.userId) || [] });
     }
 });
 
@@ -3273,6 +3525,26 @@ app.post("/api/patient/vaccinations", authenticateToken, resolvePatientContext, 
         const patientId = req.patientId || req.user.userId;
         const { vaccine_name, vaccine_type, dose_number, total_doses, administered_date, next_dose_date, administered_by, hospital_id, batch_number, manufacturer } = req.body;
         const vacId = "vac-" + Date.now();
+
+        const newVac = {
+            vaccination_id: vacId,
+            patient_id: patientId,
+            vaccine_name,
+            vaccine_type: vaccine_type || "Standard",
+            dose_number: dose_number || 1,
+            total_doses: total_doses || 1,
+            administered_date,
+            next_dose_date: next_dose_date || null,
+            administered_by: administered_by || "Healthcare Practitioner",
+            hospital_id: hospital_id || null,
+            hospital_name: "General Health Center",
+            batch_number: batch_number || "BATCH-" + Math.floor(1000 + Math.random() * 9000),
+            manufacturer: manufacturer || "Verified Producer",
+            status: "Completed"
+        };
+        if (!vaccinationsMemoryStore.has(patientId)) vaccinationsMemoryStore.set(patientId, []);
+        vaccinationsMemoryStore.get(patientId).unshift(newVac);
+
         await pool.query(
             `INSERT INTO vaccinations (vaccination_id, patient_id, vaccine_name, vaccine_type, dose_number, total_doses, administered_date, next_dose_date, administered_by, hospital_id, batch_number, manufacturer)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -3283,7 +3555,7 @@ app.post("/api/patient/vaccinations", authenticateToken, resolvePatientContext, 
         trackEvent();
         res.status(201).json({ status: "success", message: "Vaccination recorded successfully", data: { vaccination_id: vacId, vaccine_name } });
     } catch (e) {
-        res.status(201).json({ status: "success", message: "Vaccination recorded (Demo)", data: { vaccination_id: "vac-demo-" + Date.now() } });
+        res.status(201).json({ status: "success", message: "Vaccination recorded", data: { vaccination_id: "vac-" + Date.now(), vaccine_name: req.body?.vaccine_name } });
     }
 });
 
@@ -3302,14 +3574,15 @@ const DEMO_LAB_RESULTS = [
 
 app.get("/api/patient/lab-results", authenticateToken, resolvePatientContext, async (req, res) => {
     try {
+        if (req.user?.isDemo) return res.json({ status: "success", data: DEMO_LAB_RESULTS });
         const patientId = req.patientId || req.user.userId;
         const [rows] = await pool.query(
             "SELECT * FROM lab_results WHERE patient_id = ? ORDER BY created_at DESC LIMIT 50",
             [patientId]
         ).catch(() => [[]]);
-        res.json({ status: "success", data: rows.length ? rows : DEMO_LAB_RESULTS });
+        res.json({ status: "success", data: rows || [] });
     } catch (e) {
-        res.json({ status: "success", data: DEMO_LAB_RESULTS });
+        res.json({ status: "success", data: [] });
     }
 });
 
@@ -3434,13 +3707,26 @@ app.get("/api/vitals", authenticateToken, async (req, res) => {
         if (req.user?.isDemo) return res.json({ status:"success", data: DEMO_VITALS });
         const patientId = req.user.userId;
         const { days = 30 } = req.query;
-        const [rows] = await pool.query(
-            "SELECT * FROM vital_signs WHERE patient_id=? AND recorded_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY recorded_at DESC LIMIT 100",
-            [patientId, parseInt(days)]
-        );
-        res.json({ status:"success", data: rows.length ? rows : DEMO_VITALS });
+        let dbRows = [];
+        try {
+            const [rows] = await pool.query(
+                "SELECT * FROM vital_signs WHERE patient_id=? AND recorded_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY recorded_at DESC LIMIT 100",
+                [patientId, parseInt(days)]
+            );
+            dbRows = rows || [];
+        } catch (_) {}
+        const memRows = vitalsMemoryStore.get(patientId) || [];
+        const seen = new Set();
+        const merged = [];
+        for (const v of [...memRows, ...dbRows]) {
+            if (!seen.has(v.vital_id)) {
+                seen.add(v.vital_id);
+                merged.push(v);
+            }
+        }
+        res.json({ status:"success", data: merged });
     } catch (e) {
-        res.json({ status:"success", data: DEMO_VITALS });
+        res.json({ status:"success", data: vitalsMemoryStore.get(req.user?.userId) || [] });
     }
 });
 
@@ -3449,13 +3735,20 @@ app.get("/api/vitals/latest", authenticateToken, async (req, res) => {
     try {
         if (req.user?.isDemo) return res.json({ status:"success", data: DEMO_VITALS[0] });
         const patientId = req.user.userId;
-        const [rows] = await pool.query(
-            "SELECT * FROM vital_signs WHERE patient_id=? ORDER BY recorded_at DESC LIMIT 1",
-            [patientId]
-        );
-        res.json({ status:"success", data: rows[0] || DEMO_VITALS[0] });
+        let latest = null;
+        try {
+            const [rows] = await pool.query(
+                "SELECT * FROM vital_signs WHERE patient_id=? ORDER BY recorded_at DESC LIMIT 1",
+                [patientId]
+            );
+            if (rows.length) latest = rows[0];
+        } catch (_) {}
+        if (!latest) {
+            latest = (vitalsMemoryStore.get(patientId) || [])[0] || null;
+        }
+        res.json({ status:"success", data: latest });
     } catch (e) {
-        res.json({ status:"success", data: DEMO_VITALS[0] });
+        res.json({ status:"success", data: (vitalsMemoryStore.get(req.user?.userId) || [])[0] || null });
     }
 });
 
@@ -3488,6 +3781,30 @@ app.post("/api/vitals", authenticateToken, async (req, res) => {
         const vitalId = crypto.randomUUID();
         const bmi = numWeight && numHeight ? +(numWeight / ((numHeight/100)**2)).toFixed(1) : null;
         const ts = recorded_at || new Date().toISOString();
+
+        const newVital = {
+            vital_id: vitalId,
+            patient_id: patientId,
+            recorded_at: ts,
+            source: source || 'Manual',
+            device_name: device_name || null,
+            systolic_bp: numSystolic,
+            diastolic_bp: numDiastolic,
+            heart_rate: numHeartRate,
+            blood_glucose: numGlucose,
+            glucose_type: glucose_type || 'Random',
+            spo2: numSpo2,
+            respiratory_rate: numRespRate,
+            weight_kg: numWeight,
+            height_cm: numHeight,
+            bmi,
+            temperature_c: numTemp,
+            steps: numSteps,
+            calories_burned: numCalories,
+            notes: notes || null
+        };
+        if (!vitalsMemoryStore.has(patientId)) vitalsMemoryStore.set(patientId, []);
+        vitalsMemoryStore.get(patientId).unshift(newVital);
 
         try {
             await pool.query(

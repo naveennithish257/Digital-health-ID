@@ -326,9 +326,18 @@ async function handleOTPVerify(e) {
             );
         }
 
-        AppState.user = response.data.patient || response.data.user;
+        const returnedUser = response.data.patient || response.data.user || {};
+        const savedDataStr = localStorage.getItem(`userData_${AppState.tempAuthData?.healthId}`) || localStorage.getItem('userData');
+        let savedData = {};
+        if (savedDataStr) {
+            try { savedData = JSON.parse(savedDataStr); } catch (e) {}
+        }
+        AppState.user = { ...savedData, ...returnedUser };
         api.setToken(response.data.token || response.data.access_token);
         localStorage.setItem('userData', JSON.stringify(AppState.user));
+        if (AppState.user?.health_id) {
+            localStorage.setItem(`userData_${AppState.user.health_id}`, JSON.stringify(AppState.user));
+        }
         
         showToast('Login successful!', 'success');
         setTimeout(() => {
@@ -366,6 +375,10 @@ async function handleRegister(e) {
         showButtonLoader(btn);
         
         const response = await API.auth.register(formData);
+        const registeredUser = { ...formData, health_id: response.data.health_id, patient_id: response.data.health_id };
+        localStorage.setItem('userData', JSON.stringify(registeredUser));
+        localStorage.setItem(`userData_${response.data.health_id}`, JSON.stringify(registeredUser));
+        AppState.user = registeredUser;
         
         document.getElementById('newHealthId').textContent = response.data.health_id;
         elements.registerForm.classList.add('hidden');
@@ -506,65 +519,35 @@ function escapeHtml(str) {
         .replace(/'/g, '&#039;');
 }
 
-function getAllMedicalRecords(backendRecords = []) {
+function getAllMedicalRecords(backendRecords) {
     let custom = [];
     try {
         custom = JSON.parse(localStorage.getItem('medvault_custom_records') || '[]');
     } catch(e) {}
 
-    const baseline = [
-        { 
-            id: 'rec-sample-1', 
-            title: 'Complete Blood Count (CBC) Report', 
-            description: 'All vitals within normal parameters. Hemoglobin: 14.2 g/dL, Platelets: 250k', 
-            record_type: 'Lab Report', 
-            record_date: '2026-03-10', 
-            provider: 'Metro Diagnostics Lab',
-            file_name: 'CBC_Report_Mar2026.pdf',
-            file_type: 'PDF',
-            file_size_kb: 340,
-            file_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf'
-        },
-        { 
-            id: 'rec-sample-2', 
-            title: 'Chest X-Ray (PA View)', 
-            description: 'Lungs clear, cardiothoracic ratio within normal limits', 
-            record_type: 'X-Ray', 
-            record_date: '2026-02-28', 
-            provider: 'Apollo Radiology',
-            file_name: 'Chest_XRay_PA.jpg',
-            file_type: 'IMAGE',
-            file_size_kb: 780,
-            file_url: 'https://images.unsplash.com/photo-1516549655169-df83a0774514?auto=format&fit=crop&w=800&q=80'
-        },
-        { 
-            id: 'rec-sample-3', 
-            title: 'Cardiology Consultation Note', 
-            description: 'Regular rhythm, blood pressure well controlled with Amlodipine 5mg', 
-            record_type: 'Doctor Note', 
-            record_date: '2026-02-14', 
-            provider: 'Dr. Aakash Roy (Cardiology)',
-            file_name: 'Cardiology_Consult.pdf',
-            file_type: 'PDF',
-            file_size_kb: 190,
-            file_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf'
-        },
-        { 
-            id: 'rec-sample-4', 
-            title: 'COVID-19 Booster Vaccine Certificate', 
-            description: 'Pfizer-BioNTech bivalent booster administered. Batch #PV98231', 
-            record_type: 'Vaccination', 
-            record_date: '2025-11-05', 
-            provider: 'City Health Center',
-            file_name: 'Vaccination_Certificate.pdf',
-            file_type: 'PDF',
-            file_size_kb: 120,
-            file_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf'
-        }
-    ];
+    if (Array.isArray(backendRecords)) {
+        window._lastBackendRecords = backendRecords;
+    }
+    const remote = Array.isArray(backendRecords) ? backendRecords : (window._lastBackendRecords || []);
 
-    const source = (backendRecords && backendRecords.length) ? backendRecords : baseline;
-    return [...custom, ...source];
+    const normalizedRemote = remote.map(r => ({
+        ...r,
+        id: r.record_id || r.id,
+        title: r.record_title || r.title || 'Medical Record',
+        provider: r.provider || r.hospital_name || 'Self Upload',
+        description: r.description || r.diagnosis || ''
+    }));
+
+    const seen = new Set();
+    const result = [];
+    for (const r of [...custom, ...normalizedRemote]) {
+        const key = String(r.id || r.record_id || r.title + (r.record_date || ''));
+        if (!seen.has(key)) {
+            seen.add(key);
+            result.push(r);
+        }
+    }
+    return result;
 }
 
 async function loadDashboard() {
@@ -578,20 +561,12 @@ async function loadDashboard() {
     } catch (e) { /* use empty arrays on error */ }
 
     const records = getAllMedicalRecords(rawRecords);
+    prescriptions = Array.isArray(prescriptions) ? prescriptions : [];
+    appointments = Array.isArray(appointments) ? appointments : [];
 
-    if (!prescriptions || !prescriptions.length) {
-        prescriptions = [
-            { medication_name: 'Metformin', dosage: '500mg' },
-            { medication_name: 'Amlodipine', dosage: '5mg' }
-        ];
-    }
-    if (!appointments || !appointments.length) {
-        appointments = [
-            { doctor_name: 'Dr. Aakash Roy', appointment_date: '2026-10-05' }
-        ];
-    }
-
-    const recentRecords = records.slice(0, 3).map(r => generateRecordItem(r)).join('') || '<p style="color:var(--text-tertiary);padding:var(--space-md);">No records found.</p>';
+    const recentRecords = records.length
+        ? records.slice(0, 4).map(r => generateRecordItem(r)).join('')
+        : '<div style="padding:var(--space-xl);text-align:center;color:var(--text-tertiary);"><div style="font-size:32px;margin-bottom:8px;">📁</div><p style="font-weight:600;color:var(--text-secondary);margin-bottom:4px;">No records uploaded yet</p><p style="font-size:0.85rem;">Click "+ Add &amp; Upload Record" below or in Medical Records to upload your files.</p></div>';
 
     elements.mainContent.innerHTML = `
         <div class="health-id-card">
@@ -604,7 +579,7 @@ async function loadDashboard() {
                 <div class="health-id-grid">
                     <div class="health-id-field"><label>Name</label><value>${AppState.user?.full_name || '—'}</value></div>
                     <div class="health-id-field"><label>Blood Group</label><value>${AppState.user?.blood_group || '—'}</value></div>
-                    <div class="health-id-field"><label>Date of Birth</label><value>${formatDate(AppState.user?.date_of_birth) || '—'}</value></div>
+                    <div class="health-id-field"><label>Date of Birth</label><value>${AppState.user?.date_of_birth ? formatDate(AppState.user.date_of_birth) : '—'}</value></div>
                     <div class="health-id-field"><label>Phone</label><value>${AppState.user?.phone_number || '—'}</value></div>
                 </div>
             </div>
@@ -627,14 +602,17 @@ async function loadDashboard() {
             </div>
             <div class="stat-card">
                 <div class="stat-header"><div class="stat-icon">🏥</div></div>
-                <div class="stat-value">5</div>
-                <div class="stat-label">Connected Hospitals</div>
+                <div class="stat-value">${records.length ? 1 : 0}</div>
+                <div class="stat-label">Connected Facilities</div>
             </div>
         </div>
         <div class="card">
-            <div class="card-header">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
                 <h3 class="card-title">Recent Medical Records</h3>
-                <button class="btn btn-ghost" onclick="navigateTo('records')">View All →</button>
+                <div style="display:flex;gap:8px;">
+                    <button class="btn btn-primary btn-sm" onclick="openModal('addRecord')">+ Add Record</button>
+                    <button class="btn btn-ghost" onclick="navigateTo('records')">View All →</button>
+                </div>
             </div>
             <div class="records-list">${recentRecords}</div>
         </div>
@@ -649,7 +627,14 @@ async function loadRecords() {
 
     const records = getAllMedicalRecords(rawRecords);
 
-    const rows = records.map(r => generateRecordItem(r)).join('') || '<p style="color:var(--text-tertiary);padding:var(--space-md);">No records found. Add your first record.</p>';
+    const rows = records.length
+        ? records.map(r => generateRecordItem(r)).join('')
+        : `<div style="padding:48px 24px;text-align:center;color:var(--text-tertiary);">
+               <div style="font-size:40px;margin-bottom:12px;">📁</div>
+               <h4 style="font-size:1.1rem;color:var(--text-secondary);margin-bottom:6px;">No medical records uploaded yet</h4>
+               <p style="font-size:0.875rem;margin-bottom:16px;">Upload your clinical reports, lab tests, prescriptions, and radiology files to see them here.</p>
+               <button class="btn btn-primary" onclick="openModal('addRecord')">+ Upload First Record</button>
+           </div>`;
 
     elements.mainContent.innerHTML = `
         <div class="card">
@@ -675,25 +660,20 @@ async function loadRecords() {
 async function loadPrescriptions() {
     let items = [];
     try {
-        items = (await API.prescriptions.getAll()).data;
+        items = (await API.prescriptions.getAll()).data || [];
     } catch (e) { /* handled below */ }
 
-    if (!items || !items.length) {
-        items = [
-            { medication_name: 'Metformin', dosage: '500mg', frequency: 'Twice daily after meals', duration: '90 days', prescribed_by: 'Dr. Aakash Roy' },
-            { medication_name: 'Amlodipine', dosage: '5mg', frequency: 'Once daily morning', duration: '30 days', prescribed_by: 'Dr. Aakash Roy' }
-        ];
-    }
+    items = Array.isArray(items) ? items : [];
 
-    const rows = items.map(p => `
+    const rows = items.length ? items.map(p => `
         <tr>
-            <td><strong>${p.medication_name}</strong></td>
-            <td>${p.dosage}</td>
-            <td>${p.frequency}</td>
-            <td>${p.duration}</td>
-            <td>${p.prescribed_by}</td>
+            <td><strong>${escapeHtml(p.medication_name || p.medicine_name)}</strong></td>
+            <td>${escapeHtml(p.dosage || '—')}</td>
+            <td>${escapeHtml(p.frequency || '—')}</td>
+            <td>${escapeHtml(p.duration || '—')}</td>
+            <td>${escapeHtml(p.prescribed_by || p.doctor_name || '—')}</td>
         </tr>
-    `).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-tertiary);">No active prescriptions</td></tr>';
+    `).join('') : '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-tertiary);">No active prescriptions found.</td></tr>';
 
     elements.mainContent.innerHTML = `
         <div class="card">
@@ -814,17 +794,6 @@ async function loadVitals() {
     let vitals = [];
     try { vitals = (await API.vitals.getAll(30)).data || []; } catch (e) {}
 
-    if (!vitals.length) {
-        vitals = [
-            { vital_id:'v-1', recorded_at: new Date(Date.now()-0*86400000).toISOString(), source:'Bluetooth', device_name:'Apple Watch Ultra 2', heart_rate:72, systolic_bp:118, diastolic_bp:76, spo2:98, blood_glucose:null, weight_kg:72.5, temperature_c:36.6, steps:8420 },
-            { vital_id:'v-2', recorded_at: new Date(Date.now()-1*86400000).toISOString(), source:'Bluetooth', device_name:'Apple Watch Ultra 2', heart_rate:68, systolic_bp:122, diastolic_bp:78, spo2:97, blood_glucose:null, weight_kg:72.8, temperature_c:36.7, steps:6100 },
-            { vital_id:'v-3', recorded_at: new Date(Date.now()-2*86400000).toISOString(), source:'GoogleFit', device_name:'Samsung Galaxy Watch 6', heart_rate:75, systolic_bp:130, diastolic_bp:82, spo2:96, blood_glucose:134.0, weight_kg:73.0, temperature_c:36.8, steps:9800 },
-            { vital_id:'v-4', recorded_at: new Date(Date.now()-3*86400000).toISOString(), source:'Manual', device_name:null, heart_rate:80, systolic_bp:135, diastolic_bp:86, spo2:95, blood_glucose:145.0, weight_kg:73.2, temperature_c:37.1, steps:5200 },
-            { vital_id:'v-5', recorded_at: new Date(Date.now()-4*86400000).toISOString(), source:'Bluetooth', device_name:'Fitbit Sense 2', heart_rate:65, systolic_bp:120, diastolic_bp:78, spo2:98, blood_glucose:98.0, weight_kg:72.6, temperature_c:36.5, steps:11200 },
-            { vital_id:'v-6', recorded_at: new Date(Date.now()-5*86400000).toISOString(), source:'Bluetooth', device_name:'Fitbit Sense 2', heart_rate:88, systolic_bp:128, diastolic_bp:84, spo2:96, blood_glucose:null, weight_kg:73.1, temperature_c:36.9, steps:7600 },
-            { vital_id:'v-7', recorded_at: new Date(Date.now()-6*86400000).toISOString(), source:'Manual', device_name:null, heart_rate:71, systolic_bp:125, diastolic_bp:80, spo2:97, blood_glucose:115.0, weight_kg:72.9, temperature_c:36.6, steps:4300 }
-        ];
-    }
     window._vitalsData = vitals;
     const latest = vitals[0] || {};
 
@@ -852,7 +821,7 @@ async function loadVitals() {
     const v0 = vitals[0] || {}, v1 = vitals[1] || {};
     const trend = (k) => v0[k] && v1[k] ? Math.sign(v0[k] - v1[k]) : 0;
 
-    const historyRows = vitals.slice(0, 10).map(v => `
+    const historyRows = vitals.length ? vitals.slice(0, 10).map(v => `
     <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
         <td style="padding:10px 8px;font-size:12px;color:var(--text-tertiary);">${new Date(v.recorded_at).toLocaleDateString('en-IN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
         <td style="padding:10px 8px;">${v.heart_rate||'—'} <span style="color:var(--text-tertiary);font-size:11px;">bpm</span></td>
@@ -861,7 +830,7 @@ async function loadVitals() {
         <td style="padding:10px 8px;">${v.blood_glucose||'—'} <span style="color:var(--text-tertiary);font-size:11px;">${v.blood_glucose?'mg/dL':''}</span></td>
         <td style="padding:10px 8px;">${v.weight_kg||'—'} <span style="color:var(--text-tertiary);font-size:11px;">${v.weight_kg?'kg':''}</span></td>
         <td style="padding:10px 8px;font-size:11px;">${sourceIcon(v.source)} ${v.device_name||v.source||'—'}</td>
-    </tr>`).join('');
+    </tr>`).join('') : `<tr><td colspan="7" style="text-align:center;padding:32px 16px;color:var(--text-tertiary);">No vitals recorded yet. Log your first vitals or sync a device above.</td></tr>`;
 
     elements.mainContent.innerHTML = `
     <div>
@@ -1333,11 +1302,8 @@ async function loadAppointments() {
         allAppointments = res.data || [];
     } catch (e) {}
 
-    if (!allAppointments || !allAppointments.length) {
-        allAppointments = [
-            { appointment_id: 'apt-1', doctor_name: 'Dr. Aakash Roy', specialization: 'Cardiology', hospital_name: 'Metro Heart Institute', appointment_date: '2026-10-05', appointment_time: '10:30 AM', appointment_type: 'Consultation', status: 'Scheduled', reason: 'Quarterly BP review' },
-            { appointment_id: 'apt-2', doctor_name: 'Dr. Neha Verma', specialization: 'Pulmonology', hospital_name: 'City Care Clinic', appointment_date: '2026-09-10', appointment_time: '02:00 PM', appointment_type: 'Follow-up', status: 'Completed', reason: 'Bronchitis follow-up' }
-        ];
+    if (!allAppointments) {
+        allAppointments = [];
     }
 
     // Split upcoming vs past
@@ -1609,31 +1575,31 @@ async function loadHealthID() {
                             <span class="health-id-badge">Digital Health ID</span>
                             <div class="health-id-chip"></div>
                         </div>
-                        <div class="health-id-number">${AppState.user?.health_id || 'HID-2026-DEMO'}</div>
+                        <div class="health-id-number">${AppState.user?.health_id || '—'}</div>
                         <div class="health-id-grid">
                             <div class="health-id-field">
                                 <label>Full Name</label>
-                                <value>${AppState.user?.full_name || 'John Doe'}</value>
+                                <value>${AppState.user?.full_name || '—'}</value>
                             </div>
                             <div class="health-id-field">
                                 <label>Blood Group</label>
-                                <value>${AppState.user?.blood_group || 'O+'}</value>
+                                <value>${AppState.user?.blood_group || '—'}</value>
                             </div>
                             <div class="health-id-field">
                                 <label>Date of Birth</label>
-                                <value>${formatDate(AppState.user?.date_of_birth) || '15 Mar 1990'}</value>
+                                <value>${AppState.user?.date_of_birth ? formatDate(AppState.user.date_of_birth) : '—'}</value>
                             </div>
                             <div class="health-id-field">
                                 <label>Gender</label>
-                                <value>${AppState.user?.gender || 'Male'}</value>
+                                <value>${AppState.user?.gender || '—'}</value>
                             </div>
                             <div class="health-id-field">
                                 <label>Phone</label>
-                                <value>${AppState.user?.phone_number || '+91 98765 43210'}</value>
+                                <value>${AppState.user?.phone_number || '—'}</value>
                             </div>
                             <div class="health-id-field">
                                 <label>Emergency Contact</label>
-                                <value>+91 98765 43211</value>
+                                <value>${AppState.user?.emergency_contact_name ? `${AppState.user.emergency_contact_name} (${AppState.user.emergency_contact_phone || '—'})` : (AppState.user?.emergency_contact || '—')}</value>
                             </div>
                         </div>
                     </div>
@@ -1643,9 +1609,10 @@ async function loadHealthID() {
                         <h3 class="card-title">Allergies & Conditions</h3>
                     </div>
                     <div style="display: flex; gap: var(--space-sm); flex-wrap: wrap;">
-                        <span class="badge">Penicillin Allergy</span>
-                        <span class="badge">Hypertension</span>
-                        <span class="badge">Type 2 Diabetes</span>
+                        ${(AppState.user?.allergies || AppState.user?.chronic_conditions) ? `
+                            ${AppState.user?.allergies ? AppState.user.allergies.split(',').map(a => `<span class="badge" style="background:rgba(239,68,68,0.15);color:#f87171;">${escapeHtml(a.trim())}</span>`).join('') : ''}
+                            ${AppState.user?.chronic_conditions ? AppState.user.chronic_conditions.split(',').map(c => `<span class="badge">${escapeHtml(c.trim())}</span>`).join('') : ''}
+                        ` : '<span style="color:var(--text-tertiary);font-size:13px;">None reported</span>'}
                     </div>
                 </div>
             </div>
@@ -1702,28 +1669,28 @@ async function loadEmergency() {
                 <div class="form-grid">
                     <div class="form-group">
                         <label class="form-label">Blood Group</label>
-                        <div style="font-size: 1.6rem; font-weight: 700; color: #ef4444;">${user.blood_group || 'O+'}</div>
+                        <div style="font-size: 1.6rem; font-weight: 700; color: #ef4444;">${user.blood_group || '—'}</div>
                     </div>
                     <div class="form-group">
                         <label class="form-label">Date of Birth</label>
-                        <div style="font-size: 1rem; font-weight: 600;">${formatDate(user.date_of_birth) || '15 Mar 1990'}</div>
+                        <div style="font-size: 1rem; font-weight: 600;">${user.date_of_birth ? formatDate(user.date_of_birth) : '—'}</div>
                     </div>
                     <div class="form-group" style="grid-column: 1 / -1;">
                         <label class="form-label">Critical Allergies</label>
                         <div style="display: flex; gap: var(--space-sm); flex-wrap: wrap; margin-top: var(--space-sm);">
-                            <span class="badge" style="background:rgba(239,68,68,0.2);color:#f87171;">${user.allergies || 'Penicillin, Sulfa Drugs'}</span>
+                            ${user.allergies ? `<span class="badge" style="background:rgba(239,68,68,0.2);color:#f87171;">${escapeHtml(user.allergies)}</span>` : '<span style="color:var(--text-tertiary);font-size:13px;">None documented</span>'}
                         </div>
                     </div>
                     <div class="form-group" style="grid-column: 1 / -1;">
                         <label class="form-label">Chronic Conditions</label>
                         <div style="display: flex; gap: var(--space-sm); flex-wrap: wrap; margin-top: var(--space-sm);">
-                            <span class="badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;">${user.chronic_conditions || 'Hypertension, Mild Asthma'}</span>
+                            ${user.chronic_conditions ? `<span class="badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;">${escapeHtml(user.chronic_conditions)}</span>` : '<span style="color:var(--text-tertiary);font-size:13px;">None documented</span>'}
                         </div>
                     </div>
                     <div class="form-group" style="grid-column: 1 / -1;">
                         <label class="form-label">Emergency Contact</label>
-                        <div style="font-size: 1rem; font-weight: 600;">${user.emergency_contact_name || 'Priya Sharma'} (${user.emergency_contact_relation || 'Spouse'})</div>
-                        <div style="font-size: 0.85rem; color: var(--text-tertiary); margin-top: 4px;">${user.emergency_contact_phone || '+91 98765 43211'}</div>
+                        <div style="font-size: 1rem; font-weight: 600;">${user.emergency_contact_name ? `${escapeHtml(user.emergency_contact_name)} ${user.emergency_contact_relation ? `(${escapeHtml(user.emergency_contact_relation)})` : ''}` : (escapeHtml(user.emergency_contact || '—'))}</div>
+                        ${user.emergency_contact_phone ? `<div style="font-size: 0.85rem; color: var(--text-tertiary); margin-top: 4px;">${escapeHtml(user.emergency_contact_phone)}</div>` : ''}
                     </div>
                 </div>
             </div>
@@ -1739,16 +1706,8 @@ async function loadConsent() {
         consents = res.data || [];
     } catch (e) {}
 
-    if (!consents || !consents.length) {
-        consents = [
-            {
-                consent_id: 'consent-live-demo-1',
-                accessor_name: 'Dr. Aakash Roy (Cardiology - Metro Heart)',
-                accessor_type: 'Doctor',
-                consent_type: 'Full Access',
-                purpose: 'Cardiovascular checkup & prescription review'
-            }
-        ];
+    if (!consents) {
+        consents = [];
     }
 
     const listHtml = consents.length ? consents.map(c => `
@@ -1804,7 +1763,7 @@ function openGrantConsentModal() {
         <div class="modal-body">
             <div class="form-group">
                 <label class="form-label">Doctor ID or License</label>
-                <input type="text" id="consentDocId" class="form-input" placeholder="e.g. doc-001 or Dr. Aakash Roy" value="doc-001">
+                <input type="text" id="consentDocId" class="form-input" placeholder="e.g. doc-001 or Dr. Name">
             </div>
             <div class="form-group">
                 <label class="form-label">Access Level</label>
@@ -1912,14 +1871,19 @@ async function sendAIMessage() {
             </div>
         `;
     } catch (e) {
-        let demoReply = `Based on your medical records (Rahul Sharma), you have a documented allergy to <b>Penicillin and Sulfa drugs</b>, and manage <b>Type-2 Diabetes and mild Hypertension</b> with Metformin (500mg) and Amlodipine (5mg). Always verify urgent medical symptoms with a certified clinician.`;
+        const uName = AppState.user?.full_name || 'User';
+        const uAllergies = AppState.user?.allergies ? `documented allergy/sensitivity to <b>${escapeHtml(AppState.user.allergies)}</b>` : 'no documented allergies';
+        const uConditions = AppState.user?.chronic_conditions ? `monitored condition(s): <b>${escapeHtml(AppState.user.chronic_conditions)}</b>` : 'no chronic conditions recorded';
+        let demoReply = `Based on your profile (${escapeHtml(uName)}), you have ${uAllergies}, and ${uConditions}. Always verify urgent medical questions with a licensed clinician.`;
         const lower = msg.toLowerCase();
         if (lower.includes('allerg')) {
-            demoReply = `⚠️ <b>Allergy Warning:</b> You have documented contraindications to <b>Penicillin</b> and <b>Sulfa drugs</b>. Any treating doctor scanning your Emergency QR will be alerted to avoid beta-lactam antibiotics.`;
+            demoReply = AppState.user?.allergies 
+                ? `⚠️ <b>Allergy Record:</b> You have documented contraindications to <b>${escapeHtml(AppState.user.allergies)}</b>. Healthcare providers scanning your Emergency QR will be alerted.` 
+                : `✅ <b>No Known Allergies:</b> You currently have no documented allergies on file.`;
         } else if (lower.includes('medic') || lower.includes('drug') || lower.includes('rx') || lower.includes('pill')) {
-            demoReply = `💊 <b>Current Active Prescriptions:</b><br>• <b>Metformin 500mg</b> — Twice daily after meals (Diabetes management)<br>• <b>Amlodipine 5mg</b> — Once daily morning (Blood pressure control)<br>Prescribed by: Dr. Aakash Roy (Metro Heart Institute)`;
+            demoReply = `💊 <b>Prescriptions:</b> To see your active prescriptions or add new medication orders, navigate to the Medical Records or Prescriptions section.`;
         } else if (lower.includes('diet') || lower.includes('food') || lower.includes('eat')) {
-            demoReply = `🥗 <b>Personalized Dietary Advice:</b> Given your mild hypertension and diabetic profile, focus on low-glycemic complex carbohydrates, limit sodium intake under 2,000mg/day, and maintain 30 minutes of moderate aerobic activity daily.`;
+            demoReply = `🥗 <b>Personalized Dietary Advice:</b> Stay hydrated, prioritize whole foods and leafy vegetables, and consult your primary care doctor for medical dietary requirements tailored to your profile.`;
         }
         document.getElementById(loaderId).outerHTML = `
             <div style="align-self:flex-start;max-width:85%;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.25);padding:14px 18px;border-radius:14px;font-size:0.9rem;line-height:1.5;">
@@ -2020,7 +1984,7 @@ async function loadProfile() {
                         </div>
                         <div class="form-group">
                             <label class="form-label">Date of Birth</label>
-                            <input type="date" class="form-input" id="profileDOB" value="${pt?.date_of_birth ? new Date(pt.date_of_birth).toISOString().split('T')[0] : '1990-03-15'}" required>
+                            <input type="date" class="form-input" id="profileDOB" value="${pt?.date_of_birth ? new Date(pt.date_of_birth).toISOString().split('T')[0] : ''}">
                         </div>
                         <div class="form-group">
                             <label class="form-label">Gender</label>
@@ -2279,9 +2243,9 @@ function generateAppointmentItem(icon, name, details, date, time) {
 
 function updateUserDisplay() {
     if (AppState.user) {
-        const displayName = AppState.user.full_name || AppState.user.name || 'Rahul Sharma';
+        const displayName = AppState.user.full_name || AppState.user.name || 'User';
         if (elements.userName) elements.userName.textContent = displayName;
-        const initials = displayName.split(' ').filter(Boolean).map(n => n[0]).join('').toUpperCase() || 'RS';
+        const initials = displayName.split(' ').filter(Boolean).map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'U';
         if (elements.userAvatar) elements.userAvatar.textContent = initials;
     }
 }
@@ -2289,7 +2253,10 @@ function updateUserDisplay() {
 async function loadUserProfile() {
     try {
         const response = await API.patient.getProfile();
-        AppState.user = response.data;
+        const cached = localStorage.getItem('userData');
+        let cachedObj = {};
+        if (cached) { try { cachedObj = JSON.parse(cached); } catch (e) {} }
+        AppState.user = { ...cachedObj, ...response.data };
         localStorage.setItem('userData', JSON.stringify(AppState.user));
     } catch (error) {
         // Fall back to cached user data
@@ -2471,12 +2438,12 @@ function filterRecords(type, tabElement) {
 function downloadHealthID() {
     showToast('Generating printable Health ID Card...', 'info');
     const user = AppState.user || {
-        health_id: 'HID-2026-DEMO',
-        full_name: 'John Doe',
-        blood_group: 'O+',
-        date_of_birth: '1990-01-01',
-        phone_number: '+91 98765 43210',
-        emergency_contact: 'Jane Doe (+91 98765 43211)'
+        health_id: '—',
+        full_name: 'Patient',
+        blood_group: '—',
+        date_of_birth: '',
+        phone_number: '—',
+        emergency_contact: '—'
     };
 
     const printWindow = window.open('', '_blank', 'width=800,height=600');
@@ -3584,37 +3551,8 @@ async function initNotifications() {
             AppState.notifications = res.data;
         }
     } catch (e) {
-        // Fallback demo notifications
-        if (!AppState.notifications || AppState.notifications.length === 0) {
-            AppState.notifications = [
-                {
-                    notification_id: 'n-demo-1',
-                    title: '🛡️ Emergency QR Active',
-                    message: 'Your tamper-proof QR code is live with AES-256 token authorization.',
-                    notification_type: 'Emergency',
-                    priority: 'High',
-                    is_read: false,
-                    created_at: new Date(Date.now() - 1000 * 60 * 15).toISOString()
-                },
-                {
-                    notification_id: 'n-demo-2',
-                    title: '☁️ Cloudinary Vault Connected',
-                    message: 'Medical files, PDFs, and DICOM images are synced to persistent cloud storage.',
-                    notification_type: 'General',
-                    priority: 'Medium',
-                    is_read: false,
-                    created_at: new Date(Date.now() - 1000 * 60 * 45).toISOString()
-                },
-                {
-                    notification_id: 'n-demo-3',
-                    title: '👨‍⚕️ Dr. Aakash Roy - Follow-up',
-                    message: 'Consultation scheduled at Metro Heart Institute.',
-                    notification_type: 'Doctor',
-                    priority: 'Low',
-                    is_read: true,
-                    created_at: new Date(Date.now() - 1000 * 60 * 60 * 3).toISOString()
-                }
-            ];
+        if (!AppState.notifications) {
+            AppState.notifications = [];
         }
     }
     updateNotifBadge();
@@ -3759,11 +3697,7 @@ async function loadNotificationsPage() {
         const res = await API.accessLogs.getAll();
         if (res && res.data) accessLogs = res.data;
     } catch (e) {
-        accessLogs = [
-            { accessor_id: 'doc-001', accessor_type: 'Doctor', action: 'View', resource_type: 'ECG & Lab Reports', accessed_at: new Date(Date.now() - 1000 * 60 * 20).toISOString(), ip_address: '192.168.1.15' },
-            { accessor_id: 'EMERGENCY_SCAN', accessor_type: 'Emergency', action: 'Scan', resource_type: 'Emergency Health QR', accessed_at: new Date(Date.now() - 1000 * 60 * 120).toISOString(), ip_address: '10.0.4.22' },
-            { accessor_id: 'hosp-1', accessor_type: 'Hospital', action: 'View', resource_type: 'Prescriptions', accessed_at: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(), ip_address: '172.16.0.4' }
-        ];
+        accessLogs = [];
     }
 
     const unreadCount = (AppState.notifications || []).filter(n => !n.is_read).length;
@@ -3889,15 +3823,15 @@ function showDoctorModal() {
             </p>
             <div class="form-group">
                 <label class="form-label">Doctor Name</label>
-                <input type="text" id="docNameInput" class="form-input" placeholder="e.g. Dr. Aakash Roy" value="Dr. Aakash Roy">
+                <input type="text" id="docNameInput" class="form-input" placeholder="e.g. Dr. Name">
             </div>
             <div class="form-group">
                 <label class="form-label">Hospital / Clinic</label>
-                <input type="text" id="docHospitalInput" class="form-input" placeholder="e.g. Metro Heart Institute" value="Metro Heart Institute">
+                <input type="text" id="docHospitalInput" class="form-input" placeholder="e.g. Hospital Name">
             </div>
             <div class="form-group">
                 <label class="form-label">Medical License Number</label>
-                <input type="text" id="docLicenseInput" class="form-input" placeholder="e.g. MCI-DL-98214" value="MCI-DL-98214">
+                <input type="text" id="docLicenseInput" class="form-input" placeholder="e.g. MCI-DL-98214">
             </div>
         </div>
         <div class="modal-footer">
@@ -4044,7 +3978,7 @@ function openAddInsuranceModal() {
         <div class="modal-body">
             <div class="form-group">
                 <label class="form-label">Insurance Provider</label>
-                <input type="text" id="insProviderInput" class="form-input" placeholder="e.g. Star Health, HDFC ERGO, Max Bupa" value="Star Health & Allied Insurance" required />
+                <input type="text" id="insProviderInput" class="form-input" placeholder="e.g. Star Health, HDFC ERGO, Max Bupa" required />
             </div>
             <div class="form-group">
                 <label class="form-label">Policy Number</label>
@@ -4052,7 +3986,7 @@ function openAddInsuranceModal() {
             </div>
             <div class="form-group">
                 <label class="form-label">Policy Holder Name</label>
-                <input type="text" id="insHolderInput" class="form-input" value="${escapeHtml(AppState.user?.full_name || 'Rahul Sharma')}" required />
+                <input type="text" id="insHolderInput" class="form-input" value="${escapeHtml(AppState.user?.full_name || '')}" required />
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
                 <div class="form-group">
@@ -4251,12 +4185,12 @@ function openAddVaccineModal() {
             </div>
             <div class="form-group">
                 <label class="form-label">Healthcare Facility / Hospital</label>
-                <input type="text" id="vacFacilityInput" class="form-input" placeholder="e.g. Metro Heart Institute" value="Metro Heart Institute" />
+                <input type="text" id="vacFacilityInput" class="form-input" placeholder="e.g. City Health Center" />
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
                 <div class="form-group">
                     <label class="form-label">Administering Doctor / Nurse</label>
-                    <input type="text" id="vacDoctorInput" class="form-input" placeholder="e.g. Dr. Aakash Roy" value="Dr. Aakash Roy" />
+                    <input type="text" id="vacDoctorInput" class="form-input" placeholder="e.g. Dr. Name" />
                 </div>
                 <div class="form-group">
                     <label class="form-label">Batch / Lot Number</label>
