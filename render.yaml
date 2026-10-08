@@ -64,6 +64,12 @@ services:
       - key: RESEND_EMAIL_FROM
         value: "MedVault <onboarding@resend.dev>"
 
+      # ── Brevo HTTPS API (Universal Multi-User Deliverability) ─
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_SENDER_EMAIL
+        value: naveennithish257@gmail.com
+
       # ── Fast2SMS ──────────────────────────────────────────────
       - key: FAST2SMS_API_KEY
         sync: false

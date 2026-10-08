@@ -194,10 +194,50 @@ app.get("/api/test-email", async (req, res) => {
     }
 });
 
+// ── Brevo (Sendinblue) HTTPS API (Universal Email to ANY User Worldwide on Render) ──
+async function sendEmailViaBrevo(toEmail, subject, htmlContent, recipientName = "Valued User") {
+    const brevoApiKey = process.env.BREVO_API_KEY;
+    if (!brevoApiKey) return { success: false, reason: "no_brevo_key" };
+
+    const senderEmail = process.env.BREVO_SENDER_EMAIL || process.env.SMTP_USER || "naveennithish257@gmail.com";
+    const senderName = "MedVault Health ID";
+
+    try {
+        const response = await axios.post("https://api.brevo.com/v3/smtp/email", {
+            sender: { name: senderName, email: senderEmail },
+            to: [{ email: toEmail, name: recipientName }],
+            subject: subject,
+            htmlContent: htmlContent
+        }, {
+            headers: {
+                "api-key": brevoApiKey,
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            timeout: 5000
+        });
+
+        const msgId = response.data?.messageId || "brevo-success";
+        console.log(`[Brevo Email] ✅ Dispatched email to ${toEmail}. Message ID: ${msgId}`);
+        return { success: true, provider: "brevo", messageId: msgId };
+    } catch (err) {
+        console.warn(`[Brevo Email] ⚠️ Failed for ${toEmail}:`, err.response?.data || err.message);
+        return { success: false, error: err.response?.data || err.message };
+    }
+}
+
 async function sendEmail(to, subject, html) {
     const fromAddr = process.env.EMAIL_FROM || `"MedVault Health ID" <${smtpUser}>`;
 
-    // 1. Primary: Gmail SMTP (Universal delivery to any user/domain)
+    // 1. Primary: Brevo HTTPS API (Universal delivery to any email address over Port 443)
+    if (process.env.BREVO_API_KEY) {
+        try {
+            const brevoRes = await sendEmailViaBrevo(to, subject, html);
+            if (brevoRes.success) return true;
+        } catch (_) {}
+    }
+
+    // 2. Secondary: Gmail SMTP (Works on local or unblocked environments)
     try {
         if (mailTransporter) {
             const info = await mailTransporter.sendMail({
@@ -213,7 +253,7 @@ async function sendEmail(to, subject, html) {
         console.warn(`[sendEmail] ⚠️ Gmail SMTP attempt failed for ${to}:`, smtpErr.message);
     }
 
-    // 2. Fallback: Resend API
+    // 3. Fallback: Resend API
     try {
         const fallbackKey = Buffer.from("cmVfS291S1h4WVlfOFFONk5jZ2diZEV5YXFiUDNQdjRHd1o=", "base64").toString("utf-8");
         const apiKey = (process.env.RESEND_API_KEY && !process.env.RESEND_API_KEY.includes("REPLACE_WITH"))
@@ -359,7 +399,20 @@ async function sendOTPEmail(toEmail, otp, recipientName = "Valued User") {
         </div>
     </div>`;
 
-    // 1. Primary: Gmail SMTP (Universal Deliverability to any user worldwide)
+    // 1. Primary: Brevo HTTPS API (Universal Deliverability to ANY Email Address over Port 443)
+    if (process.env.BREVO_API_KEY) {
+        try {
+            const brevoRes = await sendEmailViaBrevo(toEmail, emailSubject, emailHtml, recipientName);
+            if (brevoRes.success) {
+                console.log(`[sendOTPEmail] ✅ Sent OTP email to ${toEmail} via Brevo HTTPS API (id: ${brevoRes.messageId})`);
+                return { success: true, provider: "brevo", messageId: brevoRes.messageId };
+            }
+        } catch (bErr) {
+            console.warn("[sendOTPEmail] Brevo failed, trying next provider:", bErr.message);
+        }
+    }
+
+    // 2. Secondary: Gmail SMTP (Local/Unblocked host environments)
     try {
         if (mailTransporter) {
             const senderFrom = process.env.EMAIL_FROM || `"MedVault Health ID" <${smtpUser}>`;
