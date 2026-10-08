@@ -551,6 +551,12 @@ function getAllMedicalRecords(backendRecords) {
 }
 
 async function loadDashboard() {
+    if (!AppState.user) {
+        const cached = localStorage.getItem('userData');
+        if (cached) {
+            try { AppState.user = JSON.parse(cached); } catch (e) {}
+        }
+    }
     let rawRecords = [], prescriptions = [], appointments = [];
     try {
         [rawRecords, prescriptions, appointments] = await Promise.all([
