@@ -227,6 +227,16 @@ async function handleLogin(e) {
     e.preventDefault();
     
     let healthId = document.getElementById('loginHealthId').value.trim();
+    let email = document.getElementById('loginEmail')?.value.trim() || '';
+
+    // If user enters email in Health ID box
+    if (healthId.includes('@') && !email) {
+        email = healthId;
+    }
+    if (!healthId && email) {
+        healthId = email;
+    }
+
     if (/^\d{5}$/.test(healthId)) {
         healthId = `HID-${new Date().getFullYear()}-${healthId}`;
     } else if (/^\d{4}-\d{5}$/.test(healthId)) {
@@ -234,14 +244,13 @@ async function handleLogin(e) {
     }
     const rawPhone = document.getElementById('loginPhone').value.trim();
     const phone = normalizePhone(rawPhone);
-    const email = document.getElementById('loginEmail')?.value.trim() || '';
 
     const btn = e.target.querySelector('button[type="submit"]');
     try {
         showButtonLoader(btn);
         AppState.tempAuthData = { healthId, phone, email };
 
-        // Send OTP directly to email via MSG91 / Resend
+        // Send OTP directly to email via Gmail SMTP
         window.firebaseConfirmationResult = null;
         const result = await API.auth.sendOTP(healthId, phone, email);
         

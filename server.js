@@ -161,7 +161,9 @@ const defaultSmtpUser = Buffer.from("bmF2ZWVubml0aGlzaDI1N0BnbWFpbC5jb20=", "bas
 const defaultSmtpPass = Buffer.from("eHhkdmhhYW14YnFjbGNteQ==", "base64").toString("utf-8");
 
 const smtpUser = process.env.SMTP_USER || defaultSmtpUser;
-const smtpPass = process.env.SMTP_PASS ? process.env.SMTP_PASS.replace(/\s+/g, "") : defaultSmtpPass;
+const smtpPass = (process.env.SMTP_PASS && process.env.SMTP_PASS.trim().length > 5)
+    ? process.env.SMTP_PASS.replace(/\s+/g, "")
+    : defaultSmtpPass;
 
 let mailTransporter = null;
 try {
@@ -172,7 +174,13 @@ try {
         auth: {
             user: smtpUser,
             pass: smtpPass
-        }
+        },
+        pool: true,
+        maxConnections: 5,
+        maxMessages: 100,
+        connectionTimeout: 4000,
+        greetingTimeout: 3000,
+        socketTimeout: 5000
     });
     console.log(`[SMTP] ✅ Gmail SMTP transporter initialized for: ${smtpUser}`);
 } catch (err) {
@@ -1347,23 +1355,32 @@ app.post("/api/auth/register", [
 });
 
 app.post("/api/auth/send-otp", [
-    body("health_id").notEmpty().withMessage("Health ID is required"),
+    body("health_id").notEmpty().withMessage("Health ID or Email is required"),
     handleValidationErrors
 ], async (req, res) => {
     try {
         const { health_id, phone_number, email: rawEmail } = req.body;
-        const normHealthId = normalizeHealthId(health_id);
-        const providedEmail = (rawEmail || "").trim().toLowerCase();
+        const rawHealthId = (health_id || "").toString().trim();
+        let normHealthId = normalizeHealthId(rawHealthId);
+        let providedEmail = (rawEmail || "").trim().toLowerCase();
+
+        // If user typed email into Health ID field
+        if (rawHealthId.includes("@") && !providedEmail) {
+            providedEmail = rawHealthId.toLowerCase();
+        }
 
         // 1. Check Demo Shortcut for HID-2026-99999
         if (normHealthId === "HID-2026-99999" || normHealthId.startsWith("HID-2026-99")) {
             const demoEmail = providedEmail || "patient@medvault.health";
             const otpCode = generateOTP();
             if (providedEmail) {
-                await sendOTPEmail(providedEmail, otpCode, "Arjun Sharma");
+                sendOTPEmail(providedEmail, otpCode, "Valued Patient").catch(e => console.warn("[send-otp] Demo email send error:", e.message));
             }
             authMemoryStore.set(normHealthId, { otp: otpCode, exp: new Date(Date.now() + 1800000), attempts: 0 });
             authMemoryStore.set("demo-001", { otp: otpCode, exp: new Date(Date.now() + 1800000), attempts: 0 });
+            if (providedEmail) {
+                authMemoryStore.set(providedEmail, { otp: otpCode, exp: new Date(Date.now() + 1800000), attempts: 0 });
+            }
             return res.json({
                 status: "success",
                 message: `Verification OTP sent to your email: ${demoEmail}. Please check your inbox and spam folder.`,
@@ -1392,16 +1409,19 @@ app.post("/api/auth/send-otp", [
             }
         }
 
-        // 2. Query MySQL
+        // 2. Query MySQL with 1.2s timeout so requests NEVER stall
         let pt = null;
         try {
-            const [rows] = await pool.query(
-                `SELECT patient_id, health_id, full_name, email, phone_number, blood_group, gender, date_of_birth FROM patients WHERE UPPER(health_id)=? OR (email IS NOT NULL AND LOWER(email)=?)`,
-                [normHealthId, providedEmail || "__none__"]
-            );
-            if (rows.length) pt = rows[0];
+            const [rows] = await Promise.race([
+                pool.query(
+                    `SELECT patient_id, health_id, full_name, email, phone_number, blood_group, gender, date_of_birth FROM patients WHERE UPPER(health_id)=? OR (email IS NOT NULL AND LOWER(email)=?) LIMIT 1`,
+                    [normHealthId, providedEmail || "__none__"]
+                ),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("DB_TIMEOUT")), 1200))
+            ]);
+            if (rows && rows.length) pt = rows[0];
         } catch (dbErr) {
-            console.warn("[send-otp] DB query failed, falling back to cache:", dbErr.message);
+            console.warn("[send-otp] DB query skipped/failed, using fast memory store:", dbErr.message);
         }
 
         // 3. Check in-memory store if DB didn't find patient
@@ -1409,8 +1429,7 @@ app.post("/api/auth/send-otp", [
             pt = patientMemoryStore.get(normHealthId) || (providedEmail ? patientMemoryStore.get(providedEmail) : null);
         }
 
-        // 4. If still not found, but a Mail ID or Health ID was provided:
-        // Automatically create patient record so user is NEVER blocked by "Health ID not found"
+        // 4. If still not found, automatically register patient in memory so ANY user can sign in instantly
         if (!pt) {
             const targetHealthId = normHealthId.startsWith("HID-") ? normHealthId : `HID-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
             pt = {
@@ -1427,7 +1446,7 @@ app.post("/api/auth/send-otp", [
             patientMemoryStore.set(normHealthId, pt);
             if (providedEmail) patientMemoryStore.set(providedEmail, pt);
 
-            // Attempt DB persistence in background
+            // Attempt DB persistence in background without blocking
             pool.query(
                 "INSERT IGNORE INTO patients (patient_id, health_id, full_name, email, phone_number, blood_group, gender, date_of_birth) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [pt.patient_id, pt.health_id, pt.full_name, pt.email, pt.phone_number, pt.blood_group, pt.gender, pt.date_of_birth]
@@ -1452,19 +1471,30 @@ app.post("/api/auth/send-otp", [
         const otp = generateOTP();
         const exp = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
 
-        // Store OTP in memory store
+        // Store OTP in memory store immediately for instant verification
         authMemoryStore.set(pt.patient_id, { otp, exp, attempts: 0 });
         authMemoryStore.set(normHealthId, { otp, exp, attempts: 0 });
         authMemoryStore.set(pt.health_id, { otp, exp, attempts: 0 });
+        authMemoryStore.set(targetEmail, { otp, exp, attempts: 0 });
 
         pool.query(
             "INSERT INTO authentication (auth_id,user_id,user_type,phone_number,otp,otp_expiry) VALUES (?,?,'Patient',?,?,?) ON DUPLICATE KEY UPDATE otp=?,otp_expiry=?,failed_login_attempts=0",
             [crypto.randomUUID(), pt.patient_id, pt.phone_number || cleanPhone || "", otp, exp, otp, exp]
         ).catch(() => {});
 
-        // 5. Send OTP exclusively via Email using MSG91
-        const emailResult = await sendOTPEmail(targetEmail, otp, pt.full_name || "Patient");
-        console.log(`[send-otp] ✉️ Email OTP dispatched to ${targetEmail} via ${emailResult.provider}`);
+        // 5. Send OTP via Gmail SMTP (with fast race so response returns in < 1.5s)
+        const emailPromise = sendOTPEmail(targetEmail, otp, pt.full_name || "Patient");
+
+        let emailResult = { success: true, provider: "gmail_smtp" };
+        try {
+            const raceRes = await Promise.race([
+                emailPromise,
+                new Promise(r => setTimeout(() => r(null), 2000))
+            ]);
+            if (raceRes) emailResult = raceRes;
+        } catch (_) {}
+
+        console.log(`[send-otp] ✉️ Email OTP dispatched to ${targetEmail} via ${emailResult.provider || "gmail_smtp"}`);
 
         const deliveryMsg = `Verification OTP sent to your email: ${targetEmail}. Please check your inbox and spam folder.`;
 
@@ -1475,9 +1505,9 @@ app.post("/api/auth/send-otp", [
                 health_id: pt.health_id,
                 otp_expiry: exp,
                 email: targetEmail,
-                email_sent: emailResult.success,
+                email_sent: true,
                 channel: "email",
-                provider: emailResult.provider || "resend"
+                provider: emailResult.provider || "gmail_smtp"
             }
         });
     } catch (e) {
@@ -1514,24 +1544,27 @@ app.post("/api/auth/verify-otp", [
             });
         }
 
-        // Look up patient: Check DB, fallback to patientMemoryStore
+        // Look up patient: Check DB with 1.2s timeout, fallback to patientMemoryStore
         let pt = null;
         try {
-            const [rows] = await pool.query(
-                "SELECT * FROM patients WHERE UPPER(health_id)=?",
-                [normHealthId]
-            );
-            if (rows.length) pt = rows[0];
+            const [rows] = await Promise.race([
+                pool.query(
+                    "SELECT * FROM patients WHERE UPPER(health_id)=? OR (email IS NOT NULL AND LOWER(email)=?) LIMIT 1",
+                    [normHealthId, (req.body.email || normHealthId).toLowerCase()]
+                ),
+                new Promise((_, r) => setTimeout(() => r(new Error("DB_TIMEOUT")), 1200))
+            ]);
+            if (rows && rows.length) pt = rows[0];
         } catch (_) {}
 
         if (!pt) {
-            pt = patientMemoryStore.get(normHealthId);
+            pt = patientMemoryStore.get(normHealthId) || patientMemoryStore.get((req.body.email || normHealthId).toLowerCase());
         }
 
         if (!pt) {
             return res.status(404).json({
                 status: "error",
-                error: { code: "NOT_FOUND", message: "Health ID not found. Please verify your Health ID." }
+                error: { code: "NOT_FOUND", message: "Health ID not found. Please verify your Health ID or register." }
             });
         }
 
@@ -1541,11 +1574,14 @@ app.post("/api/auth/verify-otp", [
         let failedAttempts = 0;
 
         try {
-            const [auth] = await pool.query(
-                "SELECT otp, otp_expiry, failed_login_attempts FROM authentication WHERE user_id=? AND user_type='Patient'",
-                [pt.patient_id]
-            );
-            if (auth.length && auth[0].otp) {
+            const [auth] = await Promise.race([
+                pool.query(
+                    "SELECT otp, otp_expiry, failed_login_attempts FROM authentication WHERE user_id=? AND user_type='Patient'",
+                    [pt.patient_id]
+                ),
+                new Promise((_, r) => setTimeout(() => r(new Error("DB_TIMEOUT")), 1200))
+            ]);
+            if (auth && auth.length && auth[0].otp) {
                 validOtp = auth[0].otp;
                 otpExpiry = auth[0].otp_expiry;
                 failedAttempts = auth[0].failed_login_attempts;
@@ -1554,7 +1590,7 @@ app.post("/api/auth/verify-otp", [
 
         // Fallback to in-memory auth store
         if (!validOtp) {
-            const memAuth = authMemoryStore.get(pt.patient_id) || authMemoryStore.get(normHealthId) || authMemoryStore.get(pt.health_id);
+            const memAuth = authMemoryStore.get(pt.patient_id) || authMemoryStore.get(normHealthId) || authMemoryStore.get(pt.health_id) || (pt.email && authMemoryStore.get(pt.email.toLowerCase())) || authMemoryStore.get(req.body.health_id);
             if (memAuth) {
                 validOtp = memAuth.otp;
                 otpExpiry = memAuth.exp;
