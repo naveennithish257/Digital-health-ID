@@ -252,25 +252,17 @@ async function handleLogin(e) {
         elements.loginForm.classList.add('hidden');
         elements.otpForm.classList.remove('hidden');
 
+        // Clear all OTP input fields and focus first field
+        const otpInputs = document.querySelectorAll('.otp-input');
+        otpInputs.forEach(input => input.value = '');
+        if (otpInputs[0]) otpInputs[0].focus();
+
         const alertMsg = document.getElementById('otpDeliveryMsg');
         const targetEmail = result?.data?.email || email || 'your email';
-        if (result?.data?.otp) {
-            if (alertMsg) {
-                alertMsg.innerHTML = `✉️ OTP sent to <b>${targetEmail}</b>.<br><span style="display:inline-block;margin-top:6px;font-size:1.15rem;font-weight:700;color:#10b981;letter-spacing:3px;">🔑 OTP: ${result.data.otp}</span>`;
-            }
-            // Auto-fill OTP inputs for immediate frictionless login
-            const otpInputs = document.querySelectorAll('.otp-input');
-            const digits = String(result.data.otp).split('');
-            otpInputs.forEach((input, idx) => {
-                if (digits[idx]) input.value = digits[idx];
-            });
-            showToast(`🔑 Your OTP is: ${result.data.otp} (auto-filled)`, 'success');
-        } else {
-            if (alertMsg) {
-                alertMsg.textContent = result?.message || `✉️ Verification OTP sent to ${targetEmail}.`;
-            }
-            showToast(result?.message || '✉️ Verification OTP sent to your email!', 'success');
+        if (alertMsg) {
+            alertMsg.innerHTML = `✉️ Verification code sent to <b>${targetEmail}</b>.<br><span style="display:inline-block;margin-top:4px;font-size:0.85rem;color:var(--text-secondary,#64748b);">Please check your inbox (and spam folder) and enter the 6-digit code below.</span>`;
         }
+        showToast(`✉️ Verification OTP sent to ${targetEmail}! Please check your email.`, 'success');
     } catch (error) {
         showToast(error.message || 'Failed to send OTP. Check your Health ID and email.', 'error');
     } finally {
@@ -281,23 +273,18 @@ async function handleLogin(e) {
 window.resendOTP = async function() {
     const data = AppState.tempAuthData || {};
     try {
-        showToast('✉️ Resending OTP...', 'info');
+        showToast('✉️ Resending OTP to your email...', 'info');
         const result = await API.auth.sendOTP(data.healthId, data.phone, data.email);
+        const otpInputs = document.querySelectorAll('.otp-input');
+        otpInputs.forEach(input => input.value = '');
+        if (otpInputs[0]) otpInputs[0].focus();
+
         const alertMsg = document.getElementById('otpDeliveryMsg');
         const targetEmail = result?.data?.email || data.email || 'your email';
-        if (result?.data?.otp) {
-            if (alertMsg) {
-                alertMsg.innerHTML = `✉️ New OTP sent to <b>${targetEmail}</b>.<br><span style="display:inline-block;margin-top:6px;font-size:1.15rem;font-weight:700;color:#10b981;letter-spacing:3px;">🔑 OTP: ${result.data.otp}</span>`;
-            }
-            const otpInputs = document.querySelectorAll('.otp-input');
-            const digits = String(result.data.otp).split('');
-            otpInputs.forEach((input, idx) => {
-                if (digits[idx]) input.value = digits[idx];
-            });
-            showToast(`🔑 New OTP is: ${result.data.otp} (auto-filled)`, 'success');
-        } else {
-            showToast(result?.message || '✉️ New OTP sent to your email!', 'success');
+        if (alertMsg) {
+            alertMsg.innerHTML = `✉️ New verification code sent to <b>${targetEmail}</b>.<br><span style="display:inline-block;margin-top:4px;font-size:0.85rem;color:var(--text-secondary,#64748b);">Please check your inbox (and spam folder) and enter the 6-digit code.</span>`;
         }
+        showToast(`✉️ New OTP sent to ${targetEmail}! Please check your email.`, 'success');
     } catch (err) {
         showToast(err.message || 'Failed to resend OTP', 'error');
     }

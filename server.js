@@ -266,50 +266,66 @@ async function sendEmailViaMSG91(toEmail, otp, recipientName = "Valued Patient")
 
 /**
  * Unified OTP Email Dispatcher.
- * Uses MSG91 Email API as primary, with Resend as fallback.
+ * Uses Resend Email API as primary (high deliverability to Gmail/Outlook),
+ * with MSG91 Email as parallel/fallback.
  */
-async function sendOTPEmail(toEmail, otp, recipientName = "Patient") {
+async function sendOTPEmail(toEmail, otp, recipientName = "Valued User") {
     if (!toEmail) return { success: false, reason: "no_email" };
 
-    // 1. Primary: MSG91 Email
+    const emailSubject = `MedVault Security — Your Verification OTP: ${otp}`;
+    const emailHtml = `
+    <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+        <div style="text-align: center; margin-bottom: 24px;">
+            <div style="display: inline-block; width: 48px; height: 48px; line-height: 48px; border-radius: 10px; background: #2563eb; color: #ffffff; font-size: 26px;">🏥</div>
+            <h2 style="color: #0f172a; margin: 12px 0 4px 0; font-size: 22px; font-weight: 700;">MedVault Digital Health ID</h2>
+            <p style="color: #64748b; font-size: 14px; margin: 0;">National Health Data Protection Platform</p>
+        </div>
+
+        <div style="border-top: 1px solid #f1f5f9; padding-top: 20px;">
+            <p style="color: #334155; font-size: 15px; margin: 0 0 16px 0;">Hello <b>${recipientName}</b>,</p>
+            <p style="color: #334155; font-size: 15px; margin: 0 0 20px 0; line-height: 1.5;">You requested a one-time verification code to sign in to your MedVault account. Please enter the following code:</p>
+
+            <div style="background: #f8fafc; border: 2px dashed #93c5fd; border-radius: 10px; padding: 24px; text-align: center; margin: 20px 0;">
+                <div style="font-size: 40px; font-weight: 800; letter-spacing: 8px; color: #1d4ed8; font-family: monospace;">${otp}</div>
+                <p style="color: #64748b; font-size: 13px; margin: 10px 0 0 0;">Valid for <b>30 minutes</b> &bull; Do not share with anyone</p>
+            </div>
+
+            <p style="color: #64748b; font-size: 13px; line-height: 1.5; margin: 24px 0 0 0;">
+                If you did not request this verification code, please ignore this email or contact support if you suspect unauthorized activity.
+            </p>
+        </div>
+
+        <div style="border-top: 1px solid #f1f5f9; margin-top: 28px; padding-top: 20px; text-align: center; color: #94a3b8; font-size: 12px;">
+            &copy; ${new Date().getFullYear()} MedVault Healthcare Systems. All rights reserved.
+        </div>
+    </div>`;
+
+    // 1. Primary: Resend Email (verified instant deliverability)
+    try {
+        const resendOk = await sendEmail(toEmail, emailSubject, emailHtml);
+        if (resendOk) {
+            console.log(`[sendOTPEmail] ✅ Sent OTP email to ${toEmail} via Resend`);
+            // Attempt MSG91 as well in background for multi-channel reliability
+            sendEmailViaMSG91(toEmail, otp, recipientName).catch(() => {});
+            return { success: true, provider: "resend" };
+        }
+    } catch (resendErr) {
+        console.warn("[sendOTPEmail] Resend failed, trying MSG91:", resendErr.message);
+    }
+
+    // 2. Secondary: MSG91 Email Service
     try {
         const msg91Res = await sendEmailViaMSG91(toEmail, otp, recipientName);
         if (msg91Res.success) {
+            console.log(`[sendOTPEmail] ✅ Sent OTP email to ${toEmail} via MSG91`);
             return { success: true, provider: "msg91", messageId: msg91Res.messageId };
         }
     } catch (e) {
         console.warn("[sendOTPEmail] MSG91 error:", e.message);
     }
 
-    // 2. Fallback: Resend Email
-    try {
-        const resendOk = await sendEmail(
-            toEmail,
-            `MedVault OTP: ${otp} — Valid 30 min`,
-            `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;">
-                <div style="text-align:center;margin-bottom:20px;">
-                    <span style="font-size:40px;">🏥</span>
-                    <h2 style="color:#1d4ed8;margin:8px 0 0;">MedVault Health ID</h2>
-                </div>
-                <p style="margin:0 0 16px;">Hello <b>${recipientName}</b>,</p>
-                <p style="margin:0 0 16px;">Your one-time login verification code is:</p>
-                <div style="background:#dbeafe;padding:20px;text-align:center;border-radius:8px;margin:20px 0;border:2px solid #93c5fd;">
-                    <span style="font-size:38px;font-weight:900;letter-spacing:10px;color:#1d4ed8;font-family:monospace;">${otp}</span>
-                </div>
-                <p style="color:#475569;font-size:14px;margin:0;">⏰ Valid for <b>30 minutes</b>. Do not share.</p>
-                <hr style="margin:20px 0;border:none;border-top:1px solid #e2e8f0;">
-                <p style="color:#94a3b8;font-size:12px;margin:0;">If you did not request this, ignore this email.</p>
-            </div>`
-        );
-        if (resendOk) {
-            return { success: true, provider: "resend" };
-        }
-    } catch (resendErr) {
-        console.warn("[sendOTPEmail] Resend error:", resendErr.message);
-    }
-
-    console.log(`[EMAIL FALLBACK] ✉️ OTP for ${toEmail}: ${otp}`);
-    return { success: false, provider: "none", otp };
+    console.warn(`[sendOTPEmail] ⚠️ All email providers failed for ${toEmail}`);
+    return { success: false, provider: "none" };
 }
 
 // ── SMS Service: Fast2SMS (India Instant OTP) + Twilio + MSG91 ───────────
@@ -1205,14 +1221,21 @@ app.post("/api/auth/send-otp", [
         // 1. Check Demo Shortcut for HID-2026-99999
         if (normHealthId === "HID-2026-99999" || normHealthId.startsWith("HID-2026-99")) {
             const demoEmail = providedEmail || "patient@medvault.health";
+            const otpCode = generateOTP();
             if (providedEmail) {
-                await sendOTPEmail(providedEmail, "123456", "Demo Patient");
+                await sendOTPEmail(providedEmail, otpCode, "Arjun Sharma");
             }
-            authMemoryStore.set(normHealthId, { otp: "123456", exp: new Date(Date.now() + 1800000), attempts: 0 });
+            authMemoryStore.set(normHealthId, { otp: otpCode, exp: new Date(Date.now() + 1800000), attempts: 0 });
+            authMemoryStore.set("demo-001", { otp: otpCode, exp: new Date(Date.now() + 1800000), attempts: 0 });
             return res.json({
                 status: "success",
-                message: `Demo OTP sent to ${demoEmail}. Use 123456 to login.`,
-                data: { otp_expiry: new Date(Date.now() + 1800000), email: demoEmail, otp: "123456" }
+                message: `Verification OTP sent to your email: ${demoEmail}. Please check your inbox and spam folder.`,
+                data: {
+                    health_id: "HID-2026-99999",
+                    otp_expiry: new Date(Date.now() + 1800000),
+                    email: demoEmail,
+                    channel: "email"
+                }
             });
         }
 
@@ -1306,7 +1329,7 @@ app.post("/api/auth/send-otp", [
         const emailResult = await sendOTPEmail(targetEmail, otp, pt.full_name || "Patient");
         console.log(`[send-otp] ✉️ Email OTP dispatched to ${targetEmail} via ${emailResult.provider}`);
 
-        const deliveryMsg = `OTP sent to your email: ${targetEmail}. Code: ${otp}. Please check your inbox and spam folder.`;
+        const deliveryMsg = `Verification OTP sent to your email: ${targetEmail}. Please check your inbox and spam folder.`;
 
         res.json({
             status: "success",
@@ -1317,8 +1340,7 @@ app.post("/api/auth/send-otp", [
                 email: targetEmail,
                 email_sent: emailResult.success,
                 channel: "email",
-                provider: emailResult.provider || "msg91",
-                otp: otp
+                provider: emailResult.provider || "resend"
             }
         });
     } catch (e) {
@@ -1743,10 +1765,10 @@ app.post("/api/auth/doctor/send-otp", [
             await sendOTPEmail(docs[0].email, otp, docs[0].full_name || "Doctor");
         }
 
-        const msg = docs[0].email ? `OTP sent to your email: ${docs[0].email}. Code: ${otp}` : `Doctor OTP generated: ${otp}`;
-        res.json({ status:"success", message: msg, data:{ otp_expiry:exp, otp } });
+        const msg = docs[0].email ? `Verification OTP sent to your email: ${docs[0].email}. Please check your inbox and spam folder.` : "Doctor verification OTP generated.";
+        res.json({ status:"success", message: msg, data:{ otp_expiry:exp } });
     } catch (e) {
-        res.json({ status:"success", message:"Doctor demo OTP sent (use 123456)", data:{ otp_expiry: new Date(Date.now() + 600000), otp: "123456" } });
+        res.json({ status:"success", message:"Doctor verification OTP sent.", data:{ otp_expiry: new Date(Date.now() + 600000) } });
     }
 });
 
