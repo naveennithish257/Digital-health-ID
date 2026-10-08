@@ -179,6 +179,138 @@ async function sendEmail(to, subject, html) {
     }
 }
 
+// ── MSG91 Email Service (For Email OTP Delivery) ──
+async function sendEmailViaMSG91(toEmail, otp, recipientName = "Valued Patient") {
+    if (!toEmail) return { success: false, reason: "no_email" };
+    const authKey = process.env.MSG91_AUTH_KEY;
+    if (!authKey) return { success: false, reason: "msg91_auth_key_missing" };
+
+    const emailTemplateId = process.env.MSG91_EMAIL_TEMPLATE_ID || process.env.MSG91_TEMPLATE_ID || "6ab8b5f1a174523ae50c87a2";
+    const fromEmail = process.env.MSG91_EMAIL_FROM || "support@medvault.health";
+    const emailSubject = `MedVault Health ID — Your Verification OTP: ${otp}`;
+    const emailBody = `Hello ${recipientName},\n\nYour MedVault Health ID verification OTP is: ${otp}.\nThis code is valid for 30 minutes. Please do not share this code with anyone.\n\nThank you,\nMedVault Health System`;
+
+    // Strategy 1: MSG91 v5 Email Direct Endpoint (POST https://control.msg91.com/api/v5/email)
+    try {
+        const response = await axios.post(
+            "https://control.msg91.com/api/v5/email",
+            {
+                template_id: emailTemplateId,
+                to: toEmail,
+                from: fromEmail,
+                subject: emailSubject,
+                body: emailBody,
+                otp: otp,
+                OTP: otp,
+                variables: {
+                    name: recipientName,
+                    otp: otp,
+                    OTP: otp
+                }
+            },
+            {
+                headers: {
+                    "authkey": authKey,
+                    "Content-Type": "application/json"
+                },
+                timeout: 8000
+            }
+        );
+        const resData = response.data;
+        const msgId = typeof resData === "string" ? resData : (resData?.message || resData?.request_id || resData?.data?.id);
+        if (response.status === 200 && (!resData?.type || resData.type !== "error")) {
+            console.log(`[MSG91 Email] ✅ Dispatched OTP to ${toEmail}. Message ID: ${msgId}`);
+            return { success: true, mode: "msg91_email_direct", messageId: msgId };
+        }
+        console.warn(`[MSG91 Email] ⚠️ Direct API returned error:`, resData);
+    } catch (err) {
+        console.warn(`[MSG91 Email] ⚠️ Direct API attempt failed:`, err.response?.data || err.message);
+    }
+
+    // Strategy 2: MSG91 Flow API with email recipient
+    try {
+        const flowResponse = await axios.post(
+            "https://api.msg91.com/api/v5/flow/",
+            {
+                template_id: emailTemplateId,
+                sender: process.env.MSG91_SENDER_ID || "smsind",
+                short_url: "0",
+                recipients: [
+                    {
+                        email: toEmail,
+                        name: recipientName,
+                        OTP: otp,
+                        otp: otp
+                    }
+                ]
+            },
+            {
+                headers: {
+                    "authkey": authKey,
+                    "Content-Type": "application/json"
+                },
+                timeout: 8000
+            }
+        );
+        if (flowResponse.data?.type === "success" || flowResponse.data?.message) {
+            console.log(`[MSG91 Email] ✅ Dispatched via Flow to ${toEmail}. Response:`, flowResponse.data?.message);
+            return { success: true, mode: "msg91_flow_email", messageId: flowResponse.data?.message };
+        }
+    } catch (err) {
+        console.warn(`[MSG91 Email] ⚠️ Flow API attempt failed:`, err.response?.data || err.message);
+    }
+
+    return { success: false, mode: "msg91_email_failed" };
+}
+
+/**
+ * Unified OTP Email Dispatcher.
+ * Uses MSG91 Email API as primary, with Resend as fallback.
+ */
+async function sendOTPEmail(toEmail, otp, recipientName = "Patient") {
+    if (!toEmail) return { success: false, reason: "no_email" };
+
+    // 1. Primary: MSG91 Email
+    try {
+        const msg91Res = await sendEmailViaMSG91(toEmail, otp, recipientName);
+        if (msg91Res.success) {
+            return { success: true, provider: "msg91", messageId: msg91Res.messageId };
+        }
+    } catch (e) {
+        console.warn("[sendOTPEmail] MSG91 error:", e.message);
+    }
+
+    // 2. Fallback: Resend Email
+    try {
+        const resendOk = await sendEmail(
+            toEmail,
+            `MedVault OTP: ${otp} — Valid 30 min`,
+            `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;">
+                <div style="text-align:center;margin-bottom:20px;">
+                    <span style="font-size:40px;">🏥</span>
+                    <h2 style="color:#1d4ed8;margin:8px 0 0;">MedVault Health ID</h2>
+                </div>
+                <p style="margin:0 0 16px;">Hello <b>${recipientName}</b>,</p>
+                <p style="margin:0 0 16px;">Your one-time login verification code is:</p>
+                <div style="background:#dbeafe;padding:20px;text-align:center;border-radius:8px;margin:20px 0;border:2px solid #93c5fd;">
+                    <span style="font-size:38px;font-weight:900;letter-spacing:10px;color:#1d4ed8;font-family:monospace;">${otp}</span>
+                </div>
+                <p style="color:#475569;font-size:14px;margin:0;">⏰ Valid for <b>30 minutes</b>. Do not share.</p>
+                <hr style="margin:20px 0;border:none;border-top:1px solid #e2e8f0;">
+                <p style="color:#94a3b8;font-size:12px;margin:0;">If you did not request this, ignore this email.</p>
+            </div>`
+        );
+        if (resendOk) {
+            return { success: true, provider: "resend" };
+        }
+    } catch (resendErr) {
+        console.warn("[sendOTPEmail] Resend error:", resendErr.message);
+    }
+
+    console.log(`[EMAIL FALLBACK] ✉️ OTP for ${toEmail}: ${otp}`);
+    return { success: false, provider: "none", otp };
+}
+
 // ── SMS Service: Fast2SMS (India Instant OTP) + Twilio + MSG91 ───────────
 /**
  * Send an OTP via Fast2SMS Bulk V2 OTP Route (Bypasses TRAI DLT blocks for Indian numbers).
@@ -995,14 +1127,14 @@ app.post("/api/auth/register", [
         );
         await conn.commit();
 
-        await sendSMSOTP(phone_number, otp);
-        if (email) await sendEmail(email, "Welcome to MedVault",
-            `<h2>Welcome to MedVault, ${full_name}!</h2><p>Your Health ID is: <b>${healthId}</b></p><p>Your verification OTP is: <b>${otp}</b> (valid for 10 min)</p>`);
+        if (email) {
+            await sendOTPEmail(email, otp, full_name);
+        }
 
         res.status(201).json({
             status: "success",
-            message: "Registration successful. OTP sent.",
-            data: { patient_id: patientId, health_id: healthId, otp_expiry: otpExpiry }
+            message: email ? `Registration successful. OTP sent to ${email}.` : "Registration successful.",
+            data: { patient_id: patientId, health_id: healthId, otp_expiry: otpExpiry, otp: process.env.NODE_ENV !== "production" ? otp : undefined }
         });
     } catch (e) {
         if (conn) await conn.rollback();
@@ -1021,115 +1153,110 @@ app.post("/api/auth/register", [
 
 app.post("/api/auth/send-otp", [
     body("health_id").notEmpty().withMessage("Health ID is required"),
-    body("phone_number").notEmpty().withMessage("Phone number is required"),
     handleValidationErrors
 ], async (req, res) => {
     try {
-        const { health_id, phone_number } = req.body;
-
-        // ── Normalize phone to E.164 (+91XXXXXXXXXX) server-side ────────
-        const rawDigits = phone_number.replace(/[^0-9]/g, '');
-        let cleanPhone;
-        if (phone_number.trim().startsWith('+')) {
-            cleanPhone = phone_number.replace(/[\s\-().]/g, '');
-        } else if (rawDigits.length === 10) {
-            cleanPhone = '+91' + rawDigits;
-        } else if (rawDigits.length === 12 && rawDigits.startsWith('91')) {
-            cleanPhone = '+' + rawDigits;
-        } else if (rawDigits.length === 11 && rawDigits.startsWith('0')) {
-            cleanPhone = '+91' + rawDigits.slice(1);
-        } else {
-            cleanPhone = '+91' + rawDigits.slice(-10);
-        }
+        const { health_id, phone_number, email: providedEmail } = req.body;
 
         // Demo shortcut for default demo ID
         if (health_id === "HID-2026-99999" || health_id.startsWith("HID-2026-99")) {
+            const demoEmail = providedEmail || "demo@medvault.health";
+            if (providedEmail) {
+                await sendOTPEmail(providedEmail, "123456", "Demo Patient");
+            }
             return res.json({
                 status: "success",
-                message: "Demo OTP sent. Use 123456 to login.",
-                data: { otp_expiry: new Date(Date.now() + 1800000) }
+                message: `Demo OTP sent to ${demoEmail}. Use 123456 to login.`,
+                data: { otp_expiry: new Date(Date.now() + 1800000), email: demoEmail, otp: "123456" }
             });
         }
 
-        // Try match with normalized phone OR stored phone (both formats)
-        const [pts] = await pool.query(
-            `SELECT patient_id, full_name, email, phone_number FROM patients
-             WHERE health_id=? AND (
-               REPLACE(REPLACE(phone_number,' ',''),'-','') = ?
-               OR CONCAT('+91', RIGHT(REPLACE(phone_number,' ',''),10)) = ?
-               OR phone_number = ?
-             )`,
-            [health_id, cleanPhone.replace(/[^0-9+]/g,''), cleanPhone, cleanPhone]
-        );
-        if (!pts.length) {
-            return res.status(404).json({ status:"error", error:{ code:"NOT_FOUND", message:"Health ID or phone number not found. Make sure phone matches what you registered with." } });
-        }
-
-        const otp = generateOTP();
-        const exp = new Date(Date.now() + 30*60*1000); // 30 minutes
-        await pool.query(
-            "INSERT INTO authentication (auth_id,user_id,user_type,phone_number,otp,otp_expiry) VALUES (?,?,'Patient',?,?,?) ON DUPLICATE KEY UPDATE otp=?,otp_expiry=?,failed_login_attempts=0",
-            [crypto.randomUUID(), pts[0].patient_id, pts[0].phone_number || cleanPhone, otp, exp, otp, exp]
-        );
-
-        let smsSent = false;
-        let emailSent = false;
-
-        // ── Step 1: Send email FIRST (confirmed working via Resend) ──
-        if (pts[0].email) {
-            try {
-                await sendEmail(
-                    pts[0].email,
-                    `MedVault OTP: ${otp} — Valid 30 min`,
-                    `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;">
-                        <div style="text-align:center;margin-bottom:20px;">
-                            <span style="font-size:40px;">🏥</span>
-                            <h2 style="color:#1d4ed8;margin:8px 0 0;">MedVault Health ID</h2>
-                        </div>
-                        <p style="margin:0 0 16px;">Hello <b>${pts[0].full_name || 'Patient'}</b>,</p>
-                        <p style="margin:0 0 16px;">Your one-time login verification code is:</p>
-                        <div style="background:#dbeafe;padding:20px;text-align:center;border-radius:8px;margin:20px 0;border:2px solid #93c5fd;">
-                            <span style="font-size:38px;font-weight:900;letter-spacing:10px;color:#1d4ed8;font-family:monospace;">${otp}</span>
-                        </div>
-                        <p style="color:#475569;font-size:14px;margin:0;">⏰ Valid for <b>30 minutes</b>. Do not share.</p>
-                        <hr style="margin:20px 0;border:none;border-top:1px solid #e2e8f0;">
-                        <p style="color:#94a3b8;font-size:12px;margin:0;">If you did not request this, ignore this email.</p>
-                    </div>`
-                );
-                emailSent = true;
-                console.log(`[send-otp] ✅ Email OTP sent to ${pts[0].email}`);
-            } catch (emailErr) {
-                console.warn('[send-otp] Email failed:', emailErr.message);
+        let cleanPhone = "";
+        if (phone_number) {
+            const rawDigits = phone_number.replace(/[^0-9]/g, '');
+            if (phone_number.trim().startsWith('+')) {
+                cleanPhone = phone_number.replace(/[\s\-().]/g, '');
+            } else if (rawDigits.length === 10) {
+                cleanPhone = '+91' + rawDigits;
+            } else if (rawDigits.length === 12 && rawDigits.startsWith('91')) {
+                cleanPhone = '+' + rawDigits;
+            } else if (rawDigits.length === 11 && rawDigits.startsWith('0')) {
+                cleanPhone = '+91' + rawDigits.slice(1);
+            } else {
+                cleanPhone = '+91' + rawDigits.slice(-10);
             }
         }
 
-        // ── Step 2: Try SMS (best-effort — may not deliver on trial accounts) ──
+        // Try match by health_id in patients table
+        let pts = [];
         try {
-            const smsResult = await sendSMSOTP(cleanPhone, otp);
-            smsSent = smsResult?.success === true && smsResult?.mode !== 'fallback';
-            console.log(`[send-otp] SMS result: mode=${smsResult?.mode} success=${smsResult?.success}`);
-        } catch (smsErr) {
-            console.warn('[send-otp] SMS failed (non-fatal):', smsErr.message);
+            const [rows] = await pool.query(
+                `SELECT patient_id, full_name, email, phone_number FROM patients WHERE health_id=?`,
+                [health_id]
+            );
+            pts = rows;
+        } catch (dbErr) {
+            console.warn("[send-otp] DB query failed:", dbErr.message);
         }
 
-        // ── Build delivery message ──
-        let deliveryMsg;
-        if (emailSent && smsSent) deliveryMsg = `OTP sent to your email (${pts[0].email}) and phone.`;
-        else if (emailSent)        deliveryMsg = `OTP sent to your email: ${pts[0].email}. Check inbox & spam.`;
-        else if (smsSent)          deliveryMsg = 'OTP sent to your phone via SMS.';
-        else                       deliveryMsg = 'OTP generated. Check your registered email.';
+        // Hardcoded known demo fallback for HID-2026-12345 if DB offline
+        if (!pts.length && health_id === "HID-2026-12345") {
+            pts = [{
+                patient_id: "PAT001",
+                full_name: "Rahul Sharma",
+                email: providedEmail || "naveennithish257@gmail.com",
+                phone_number: "+919876543210"
+            }];
+        }
 
-        // Always include OTP in response when email is only channel
-        // (SMS trial accounts return 'success' but don't deliver — user needs to see OTP on screen)
-        const includeOtpInResponse = !smsSent || process.env.NODE_ENV !== 'production';
+        if (!pts.length) {
+            return res.status(404).json({
+                status: "error",
+                error: { code: "NOT_FOUND", message: "Health ID not found. Make sure your Health ID is correct." }
+            });
+        }
+
+        const patient = pts[0];
+        const targetEmail = (providedEmail && providedEmail.trim()) || patient.email;
+
+        if (!targetEmail) {
+            return res.status(400).json({
+                status: "error",
+                error: {
+                    code: "EMAIL_REQUIRED",
+                    message: "No registered email address found for this Health ID. Please provide your email address to receive your OTP."
+                }
+            });
+        }
+
+        const otp = generateOTP();
+        const exp = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+
+        try {
+            await pool.query(
+                "INSERT INTO authentication (auth_id,user_id,user_type,phone_number,otp,otp_expiry) VALUES (?,?,'Patient',?,?,?) ON DUPLICATE KEY UPDATE otp=?,otp_expiry=?,failed_login_attempts=0",
+                [crypto.randomUUID(), patient.patient_id, patient.phone_number || cleanPhone || "", otp, exp, otp, exp]
+            );
+        } catch (dbErr) {
+            console.warn("[send-otp] Auth DB update failed:", dbErr.message);
+        }
+
+        // ── Send OTP exclusively via Email using MSG91 (with Resend fallback) ──
+        const emailResult = await sendOTPEmail(targetEmail, otp, patient.full_name || "Patient");
+        console.log(`[send-otp] ✉️ Email OTP dispatched to ${targetEmail} via ${emailResult.provider}`);
+
+        const deliveryMsg = `OTP sent to your email: ${targetEmail}. Please check your inbox and spam folder.`;
+        const includeOtpInResponse = !emailResult.success || process.env.NODE_ENV !== "production";
 
         res.json({
-            status: 'success',
+            status: "success",
             message: deliveryMsg,
             data: {
                 otp_expiry: exp,
-                email_sent: emailSent,
-                sms_sent: smsSent,
+                email: targetEmail,
+                email_sent: emailResult.success,
+                channel: "email",
+                provider: emailResult.provider || "msg91",
                 otp: includeOtpInResponse ? otp : undefined
             }
         });
@@ -1491,26 +1618,12 @@ app.post("/api/auth/doctor/send-otp", [
             [crypto.randomUUID(), docs[0].doctor_id, docs[0].phone_number || cleanPhone, otp, exp, otp, exp]
         );
 
-        // Try SMS (best-effort)
-        try { await sendSMSOTP(cleanPhone, otp); } catch(e) { console.warn('[doctor send-otp] SMS failed:', e.message); }
-
+        // Send OTP exclusively to doctor's email via MSG91 / Resend
         if (docs[0].email) {
-            await sendEmail(
-                docs[0].email,
-                "MedVault - Doctor Portal Verification OTP",
-                `<div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
-                    <h2 style="color: #0d9488; margin-top: 0;">MedVault Doctor Verification</h2>
-                    <p>Hello <b>${docs[0].full_name || 'Doctor'}</b>,</p>
-                    <p>Your one-time portal login verification code is:</p>
-                    <div style="background: #f0fdfa; padding: 15px; text-align: center; border-radius: 6px; margin: 20px 0;">
-                        <span style="font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #0f766e;">${otp}</span>
-                    </div>
-                    <p style="color: #64748b; font-size: 14px;">This code is valid for 10 minutes. Do not share this code with anyone.</p>
-                </div>`
-            );
+            await sendOTPEmail(docs[0].email, otp, docs[0].full_name || "Doctor");
         }
 
-        const msg = docs[0].email ? "OTP sent to your registered phone and email." : "OTP sent to your registered phone.";
+        const msg = docs[0].email ? `OTP sent to your email: ${docs[0].email}` : "Doctor OTP generated.";
         res.json({ status:"success", message: msg, data:{ otp_expiry:exp } });
     } catch (e) {
         res.json({ status:"success", message:"Doctor demo OTP sent (use 123456)", data:{ otp_expiry: new Date(Date.now() + 600000) } });
@@ -1660,17 +1773,22 @@ app.put("/api/patient/profile", authenticateToken, resolvePatientContext, async 
         if (emergency_contact_phone !== undefined) { updateFields.push("emergency_contact_phone = ?"); updateValues.push(emergency_contact_phone); }
         if (emergency_contact_relation !== undefined) { updateFields.push("emergency_contact_relation = ?"); updateValues.push(emergency_contact_relation); }
 
-        if (updateFields.length > 0) {
-            updateValues.push(patientId);
-            await pool.query(`UPDATE patients SET ${updateFields.join(", ")} WHERE patient_id = ?`, updateValues);
-            if (phone_number !== undefined) {
-                await pool.query("UPDATE authentication SET phone_number = ? WHERE user_id = ? AND user_type = 'Patient'", [phone_number, patientId]).catch(() => {});
+        let pt = req.body;
+        try {
+            if (updateFields.length > 0) {
+                updateValues.push(patientId);
+                await pool.query(`UPDATE patients SET ${updateFields.join(", ")} WHERE patient_id = ?`, updateValues);
+                if (phone_number !== undefined) {
+                    await pool.query("UPDATE authentication SET phone_number = ? WHERE user_id = ? AND user_type = 'Patient'", [phone_number, patientId]).catch(() => {});
+                }
             }
+            const [updated] = await pool.query("SELECT * FROM patients WHERE patient_id = ?", [patientId]);
+            if (updated.length) pt = updated[0];
+        } catch (dbErr) {
+            console.warn("[Update Profile] DB offline, using memory state:", dbErr.message);
+            pt = { ...(DEMO_PATIENT || {}), ...req.body, patient_id: patientId };
         }
-
-        const [updated] = await pool.query("SELECT * FROM patients WHERE patient_id = ?", [patientId]);
-        const pt = updated.length ? updated[0] : req.body;
-        await logAccess(patientId, req.user.userId, req.user.userType, "Update", "PatientProfile", patientId, req.ip);
+        await logAccess(patientId, req.user.userId, req.user.userType, "Update", "PatientProfile", patientId, req.ip).catch(() => {});
 
         res.json({
             status: "success",
@@ -1687,21 +1805,24 @@ app.put("/api/patient/profile", authenticateToken, resolvePatientContext, async 
 app.get("/api/patient/export-data", authenticateToken, resolvePatientContext, async (req, res) => {
     try {
         const patientId = req.patientId || req.user.userId;
-        const [patients] = await pool.query("SELECT * FROM patients WHERE patient_id=?", [patientId]);
-        const [records] = await pool.query("SELECT record_id,record_title,record_type,record_date,file_url,created_at FROM medical_records WHERE patient_id=?", [patientId]);
-        const [prescriptions] = await pool.query("SELECT * FROM prescriptions WHERE patient_id=?", [patientId]).catch(() => [[]]);
-        let vitals = [];
+        let patients = [], records = [], prescriptions = [], vitals = [], appointments = [], accessLogs = [];
         try {
-            const [vRows] = await pool.query("SELECT * FROM vital_signs WHERE patient_id=? ORDER BY recorded_at DESC", [patientId]);
-            vitals = vRows;
-        } catch (_) {}
-        const [appointments] = await pool.query("SELECT * FROM appointments WHERE patient_id=?", [patientId]).catch(() => [[]]);
-        const [accessLogs] = await pool.query("SELECT * FROM access_logs WHERE patient_id=? ORDER BY accessed_at DESC LIMIT 50", [patientId]).catch(() => [[]]);
+            const [p] = await pool.query("SELECT * FROM patients WHERE patient_id=?", [patientId]);
+            patients = p;
+            const [r] = await pool.query("SELECT record_id,record_title,record_type,record_date,file_url,created_at FROM medical_records WHERE patient_id=?", [patientId]);
+            records = r;
+            prescriptions = await pool.query("SELECT * FROM prescriptions WHERE patient_id=?", [patientId]).then(([rows]) => rows).catch(() => []);
+            vitals = await pool.query("SELECT * FROM vital_signs WHERE patient_id=? ORDER BY recorded_at DESC", [patientId]).then(([rows]) => rows).catch(() => []);
+            appointments = await pool.query("SELECT * FROM appointments WHERE patient_id=?", [patientId]).then(([rows]) => rows).catch(() => []);
+            accessLogs = await pool.query("SELECT * FROM access_logs WHERE patient_id=? ORDER BY accessed_at DESC LIMIT 50", [patientId]).then(([rows]) => rows).catch(() => []);
+        } catch (dbErr) {
+            console.warn("[Export Data] DB offline, using fallback records:", dbErr.message);
+        }
 
         const exportData = {
             exported_at: new Date().toISOString(),
             patient_profile: patients[0] || DEMO_PATIENT,
-            medical_records: records,
+            medical_records: records.length ? records : [],
             prescriptions: prescriptions,
             vitals: vitals,
             appointments: appointments,

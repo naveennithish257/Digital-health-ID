@@ -141,7 +141,7 @@ const API = {
     // Authentication
     auth: {
         register: (data) => api.post('/auth/register', data),
-        sendOTP: (healthId, phone) => api.post('/auth/send-otp', { health_id: healthId, phone_number: phone }),
+        sendOTP: (healthId, phone, email) => api.post('/auth/send-otp', { health_id: healthId, phone_number: phone, email: email }),
         verifyOTP: (healthId, phone, otp) => api.post('/auth/verify-otp', { health_id: healthId, phone_number: phone, otp }),
         getFirebaseConfig: () => api.get('/auth/firebase-config'),
         firebaseLogin: (healthId, idToken) => api.post('/auth/firebase-login', { health_id: healthId, id_token: idToken }),

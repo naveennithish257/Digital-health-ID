@@ -37,16 +37,18 @@
                 <!-- Login Form -->
                 <form id="loginForm" class="auth-form">
                     <div class="form-group">
-                        <label class="form-label">Health ID</label>
-                        <input type="text" class="form-input" id="loginHealthId" placeholder="Enter your Health ID" required autocomplete="off">
+                        <label class="form-label">Health ID <span style="color: var(--danger, #ef4444);">*</span></label>
+                        <input type="text" class="form-input" id="loginHealthId" placeholder="e.g. HID-2026-12345" required autocomplete="off">
                     </div>
                     <div class="form-group">
-                        <label class="form-label">Phone Number</label>
-                        <input type="tel" class="form-input" id="loginPhone" placeholder="Enter mobile number with country code" required autocomplete="off">
+                        <label class="form-label">Mail ID <span style="color: var(--danger, #ef4444);">*</span> <span style="font-weight: normal; color: var(--text-tertiary, #94a3b8); font-size: 0.78rem;">(to receive OTP via MSG91)</span></label>
+                        <input type="email" class="form-input" id="loginEmail" placeholder="Enter your email address (e.g. yourname@gmail.com)" required autocomplete="email">
                     </div>
-                    <!-- Invisible reCAPTCHA for Firebase Phone Auth -->
-                    <div id="recaptcha-container"></div>
-                    <button type="submit" class="btn btn-primary btn-block" id="sendOtpBtn">Send OTP via SMS</button>
+                    <div class="form-group">
+                        <label class="form-label">Phone Number <span style="font-weight: normal; color: var(--text-tertiary, #94a3b8); font-size: 0.78rem;">(Optional)</span></label>
+                        <input type="tel" class="form-input" id="loginPhone" placeholder="+91 XXXXX XXXXX" autocomplete="tel">
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block" id="sendOtpBtn">✉️ Send OTP to Mail ID</button>
                     <div style="margin-top: 18px; display: flex; justify-content: space-between; font-size: 0.8rem;">
                         <a href="/admin" target="_blank" style="color: var(--text-tertiary, #94a3b8); text-decoration: none;">🛡️ Admin Portal</a>
                         <a href="#" onclick="showDoctorModal()" style="color: var(--text-tertiary, #94a3b8); text-decoration: none;">👨‍⚕️ Doctor Login</a>
@@ -57,10 +59,10 @@
                 <form id="otpForm" class="auth-form hidden">
                     <div class="alert alert-info" id="otpDeliveryAlert">
                         <span>✉️</span>
-                        <span id="otpDeliveryMsg">OTP sent to your registered email and phone</span>
+                        <span id="otpDeliveryMsg">OTP sent to your mail ID via MSG91</span>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">Enter OTP</label>
+                        <label class="form-label">Enter 6-Digit Email OTP</label>
                         <div class="otp-container">
                             <input type="text" class="otp-input" maxlength="1" data-index="0">
                             <input type="text" class="otp-input" maxlength="1" data-index="1">
@@ -70,8 +72,8 @@
                             <input type="text" class="otp-input" maxlength="1" data-index="5">
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-primary btn-block">Verify & Login</button>
-                    <button type="button" class="btn btn-ghost btn-block mt-md" onclick="resendOTP()">Resend OTP</button>
+                    <button type="submit" class="btn btn-primary btn-block">Verify OTP & Login</button>
+                    <button type="button" class="btn btn-ghost btn-block mt-md" onclick="resendOTP()">✉️ Resend OTP to Mail ID</button>
                 </form>
 
                 <!-- Registration Form -->

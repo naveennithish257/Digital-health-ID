@@ -229,46 +229,32 @@ async function handleLogin(e) {
     const healthId = document.getElementById('loginHealthId').value.trim();
     const rawPhone = document.getElementById('loginPhone').value.trim();
     const phone = normalizePhone(rawPhone);
+    const email = document.getElementById('loginEmail')?.value.trim() || '';
 
     const btn = e.target.querySelector('button[type="submit"]');
     try {
         showButtonLoader(btn);
-        AppState.tempAuthData = { healthId, phone };
+        AppState.tempAuthData = { healthId, phone, email };
 
-        // Attempt Firebase Phone Auth if configured
-        const isFirebase = await initFirebaseAuth();
-        if (isFirebase && window.recaptchaVerifier) {
-            try {
-                const confirmation = await firebase.auth().signInWithPhoneNumber(phone, window.recaptchaVerifier);
-                window.firebaseConfirmationResult = confirmation;
-                elements.loginForm.classList.add('hidden');
-                elements.otpForm.classList.remove('hidden');
-                const alertMsg = document.getElementById('otpDeliveryMsg');
-                if (alertMsg) alertMsg.textContent = `SMS OTP sent to ${phone} via Firebase`;
-                showToast(`📲 Firebase SMS OTP sent to ${phone}!`, 'success');
-                return;
-            } catch (fbErr) {
-                console.warn('[Firebase] SMS send failed, falling back to server OTP:', fbErr.message);
-                if (window.recaptchaVerifier?.render) {
-                    try { window.recaptchaVerifier.render().then(widgetId => grecaptcha.reset(widgetId)); } catch(_) {}
-                }
-            }
-        }
-
-        // Standard Server OTP fallback (Resend Email + SMS Best-effort + Dev Display)
+        // Send OTP directly to email via MSG91 / Resend
         window.firebaseConfirmationResult = null;
-        const result = await API.auth.sendOTP(healthId, phone);
+        const result = await API.auth.sendOTP(healthId, phone, email);
         
         elements.loginForm.classList.add('hidden');
         elements.otpForm.classList.remove('hidden');
 
+        const alertMsg = document.getElementById('otpDeliveryMsg');
+        if (alertMsg) {
+            alertMsg.textContent = result?.message || `✉️ Verification OTP sent to ${result?.data?.email || email || 'your email'}.`;
+        }
+
         if (result?.data?.otp) {
             showToast(`🔑 Your OTP is: ${result.data.otp} (also sent to email)`, 'success');
         } else {
-            showToast(result?.message || '✉️ OTP sent! Check your registered phone and email.', 'success');
+            showToast(result?.message || '✉️ Verification OTP sent to your email!', 'success');
         }
     } catch (error) {
-        showToast(error.message || 'Failed to send OTP. Check your Health ID and phone number.', 'error');
+        showToast(error.message || 'Failed to send OTP. Check your Health ID and email.', 'error');
     } finally {
         hideButtonLoader(btn);
     }
@@ -365,22 +351,20 @@ function proceedToLogin() {
 
 async function resendOTP() {
     if (!AppState.tempAuthData || !AppState.tempAuthData.healthId) {
-        showToast('Please enter your Health ID and Phone first', 'error');
+        showToast('Please enter your Health ID and Mail ID first', 'error');
         return;
     }
     try {
-        const { healthId, phone } = AppState.tempAuthData;
-        if (window.firebaseConfirmationResult && firebaseAuthReady && window.recaptchaVerifier) {
-            const confirmation = await firebase.auth().signInWithPhoneNumber(phone, window.recaptchaVerifier);
-            window.firebaseConfirmationResult = confirmation;
-            showToast(`📲 Firebase SMS OTP resent to ${phone}!`, 'success');
+        const { healthId, phone, email } = AppState.tempAuthData;
+        const res = await API.auth.sendOTP(healthId, phone, email);
+        const alertMsg = document.getElementById('otpDeliveryMsg');
+        if (alertMsg) {
+            alertMsg.textContent = res?.message || `✉️ Verification OTP sent to ${res?.data?.email || email || 'your mail ID'}.`;
+        }
+        if (res?.data?.otp) {
+            showToast(`🔑 Your new OTP is: ${res.data.otp} (sent to mail ID)`, 'success');
         } else {
-            const res = await API.auth.sendOTP(healthId, phone);
-            if (res?.data?.otp) {
-                showToast(`🔑 Your new OTP is: ${res.data.otp} (also sent to email)`, 'success');
-            } else {
-                showToast(res?.message || '✉️ New OTP sent to your registered phone and email.', 'success');
-            }
+            showToast(res?.message || '✉️ New OTP sent to your mail ID via MSG91.', 'success');
         }
         // Clear previous OTP inputs
         document.querySelectorAll('.otp-input').forEach(input => { input.value = ''; });
