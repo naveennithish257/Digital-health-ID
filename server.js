@@ -215,7 +215,7 @@ async function sendEmail(to, subject, html) {
 
     // 2. Fallback: Resend API
     try {
-        const fallbackKey = Buffer.from("cmVfNjl0Nk5SQmdfNXUzN3pYelMybVdNZlNvb3ltQnhTUmRH", "base64").toString("utf-8");
+        const fallbackKey = Buffer.from("cmVfS291S1h4WVlfOFFONk5jZ2diZEV5YXFiUDNQdjRHd1o=", "base64").toString("utf-8");
         const apiKey = (process.env.RESEND_API_KEY && !process.env.RESEND_API_KEY.includes("REPLACE_WITH"))
             ? process.env.RESEND_API_KEY
             : fallbackKey;
@@ -378,7 +378,7 @@ async function sendOTPEmail(toEmail, otp, recipientName = "Valued User") {
 
     // 2. Secondary: Resend Email
     try {
-        const fallbackKey = Buffer.from("cmVfNjl0Nk5SQmdfNXUzN3pYelMybVdNZlNvb3ltQnhTUmRH", "base64").toString("utf-8");
+        const fallbackKey = Buffer.from("cmVfS291S1h4WVlfOFFONk5jZ2diZEV5YXFiUDNQdjRHd1o=", "base64").toString("utf-8");
         const apiKey = (process.env.RESEND_API_KEY && !process.env.RESEND_API_KEY.includes("REPLACE_WITH"))
             ? process.env.RESEND_API_KEY
             : fallbackKey;
