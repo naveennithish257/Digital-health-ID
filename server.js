@@ -168,24 +168,31 @@ const smtpPass = (process.env.SMTP_PASS && process.env.SMTP_PASS.trim().length >
 let mailTransporter = null;
 try {
     mailTransporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST || "smtp.gmail.com",
-        port: parseInt(process.env.SMTP_PORT || "465", 10),
-        secure: process.env.SMTP_SECURE !== "false",
+        service: "gmail",
         auth: {
             user: smtpUser,
             pass: smtpPass
-        },
-        pool: true,
-        maxConnections: 5,
-        maxMessages: 100,
-        connectionTimeout: 4000,
-        greetingTimeout: 3000,
-        socketTimeout: 5000
+        }
     });
     console.log(`[SMTP] ✅ Gmail SMTP transporter initialized for: ${smtpUser}`);
 } catch (err) {
     console.warn("[SMTP] ⚠️ Transporter init warning:", err.message);
 }
+
+app.get("/api/test-email", async (req, res) => {
+    const to = req.query.to || smtpUser;
+    try {
+        const info = await mailTransporter.sendMail({
+            from: process.env.EMAIL_FROM || `"MedVault Health ID" <${smtpUser}>`,
+            to: to,
+            subject: "MedVault Test Email Delivery",
+            text: "This is a verification test to confirm MedVault can send emails to: " + to
+        });
+        res.json({ success: true, provider: "gmail_smtp", messageId: info.messageId, to: to });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message, code: err.code });
+    }
+});
 
 async function sendEmail(to, subject, html) {
     const fromAddr = process.env.EMAIL_FROM || `"MedVault Health ID" <${smtpUser}>`;
