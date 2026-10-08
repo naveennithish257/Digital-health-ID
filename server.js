@@ -1289,7 +1289,7 @@ app.post("/api/auth/firebase-login", [
         }
 
         // 2. Extract verified phone number from token
-        const firebasePhone = decoded.phone_number; // e.g. "+918248728767"
+        const firebasePhone = decoded.phone_number; // e.g. "+919876543210"
         if (!firebasePhone) {
             return res.status(400).json({
                 status: "error",

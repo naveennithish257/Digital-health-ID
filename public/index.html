@@ -38,11 +38,11 @@
                 <form id="loginForm" class="auth-form">
                     <div class="form-group">
                         <label class="form-label">Health ID</label>
-                        <input type="text" class="form-input" id="loginHealthId" placeholder="HID-2026-12345" required>
+                        <input type="text" class="form-input" id="loginHealthId" placeholder="Enter your Health ID" required autocomplete="off">
                     </div>
                     <div class="form-group">
                         <label class="form-label">Phone Number</label>
-                        <input type="tel" class="form-input" id="loginPhone" placeholder="+91 8248728767" required>
+                        <input type="tel" class="form-input" id="loginPhone" placeholder="Enter mobile number with country code" required autocomplete="off">
                     </div>
                     <!-- Invisible reCAPTCHA for Firebase Phone Auth -->
                     <div id="recaptcha-container"></div>
@@ -146,7 +146,7 @@
                     <h2 class="text-center mt-lg">Registration Successful!</h2>
                     <p class="text-center text-tertiary mt-md">Your Health ID has been created</p>
                     <div class="health-id-display mt-lg">
-                        <span id="newHealthId">HID-2026-12345</span>
+                        <span id="newHealthId">HID-YYYY-XXXXX</span>
                     </div>
                     <p class="text-center text-tertiary text-sm mt-md">Please save this ID for future login</p>
                     <button type="button" class="btn btn-primary btn-block mt-lg" onclick="proceedToLogin()">Proceed to Login</button>
